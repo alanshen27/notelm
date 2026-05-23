@@ -1,9 +1,15 @@
 from dataclasses import dataclass
 from pathlib import Path
+import os
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
+
+import numpy as np
 import pretty_midi
 from torch.utils.data import Dataset
 import torch
 from tqdm import tqdm
+
 
 @dataclass
 class MidiTokenizerConfig:
@@ -114,34 +120,45 @@ class MidiTokenizer:
 
     def decode_tokens(self, ids):
         return [self.id_to_token.get(i, "UNK") for i in ids]
-    
+
+
+def _file_to_samples(file_path, tokenizer, seq_len):
+    seq = tokenizer.encode_midi(file_path)
+    pad_id = tokenizer.token_to_id["PAD"]
+
+    if len(seq) < seq_len + 1:
+        seq = seq + [pad_id] * (seq_len + 1 - len(seq))
+
+    arr = np.asarray(seq, dtype=np.int64)
+    windows = np.lib.stride_tricks.sliding_window_view(arr, seq_len + 1)
+    x = torch.from_numpy(windows[:, :-1].copy())
+    y = torch.from_numpy(windows[:, 1:].copy())
+    return list(zip(x.unbind(0), y.unbind(0)))
+
+
 class MidiDataset(Dataset):
 
-    def __init__(self, midi_folder, tokenizer, seq_len=100):
-
-        self.samples = []
+    def __init__(self, midi_folder, tokenizer, seq_len=100, num_workers=None):
 
         files = sorted(Path(midi_folder).glob("*.midi"))
+        if not files:
+            self.samples = []
+            return
 
-        for file in tqdm(files, desc="Loading MIDI", unit="file"):
-            seq = tokenizer.encode_midi(file)
+        if num_workers is None:
+            num_workers = min(32, os.cpu_count() or 4)
 
-            # sliding window
-            pad_id = tokenizer.token_to_id["PAD"]
+        worker = partial(_file_to_samples, tokenizer=tokenizer, seq_len=seq_len)
+        self.samples = []
 
-            if len(seq) < seq_len + 1:
-                seq = seq + [pad_id] * (seq_len + 1 - len(seq))
-
-            for i in range(len(seq)-seq_len):
-                x = seq[i:i+seq_len]
-                y = seq[i+1:i+seq_len+1]
-
-                self.samples.append(
-                    (
-                        torch.tensor(x),
-                        torch.tensor(y)
-                    )
-                )
+        with ThreadPoolExecutor(max_workers=num_workers) as pool:
+            for batch in tqdm(
+                pool.map(worker, files),
+                total=len(files),
+                desc="Loading MIDI",
+                unit="file",
+            ):
+                self.samples.extend(batch)
 
     def __len__(self):
         return len(self.samples)
