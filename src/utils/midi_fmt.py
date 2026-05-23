@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 from pathlib import Path
 import os
-from concurrent.futures import ThreadPoolExecutor
 from functools import partial
+from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 import pretty_midi
@@ -151,7 +151,9 @@ class MidiDataset(Dataset):
         worker = partial(_file_to_samples, tokenizer=tokenizer, seq_len=seq_len)
         self.samples = []
 
-        with ThreadPoolExecutor(max_workers=num_workers) as pool:
+        num_workers = min(32, os.cpu_count() or 4)
+
+        with ProcessPoolExecutor(max_workers=num_workers) as pool:
             for batch in tqdm(
                 pool.map(worker, files),
                 total=len(files),
