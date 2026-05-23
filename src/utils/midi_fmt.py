@@ -158,17 +158,16 @@ class MidiDataset(Dataset):
             all_tokens.extend(seq)
             all_tokens.append(eos)
 
-        arr = np.asarray(all_tokens, dtype=np.int64)
-        windows = np.lib.stride_tricks.sliding_window_view(arr, seq_len + 1)
-
-        self.x = torch.from_numpy(windows[:, :-1].copy())
-        self.y = torch.from_numpy(windows[:, 1:].copy())
-
+        all_tokens = np.asarray(all_tokens, dtype=np.int64)
+        self.tokens = torch.from_numpy(all_tokens)
+        self.seq_len = seq_len
     def __len__(self):
-        return self.x.size(0)
+        return len(self.tokens) - self.seq_len
 
     def __getitem__(self, idx):
-        return self.x[idx], self.y[idx]
+        x = self.tokens[idx:idx+self.seq_len]
+        y = self.tokens[idx+1:idx+self.seq_len+1]
+        return x, y
 
 
 # dataset_train = MIDIDataset(
