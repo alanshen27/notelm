@@ -3,6 +3,7 @@ from pathlib import Path
 import os
 from functools import partial
 from concurrent.futures import ProcessPoolExecutor
+from torch._tensor import Tensor
 
 import numpy as np
 import pretty_midi
@@ -122,19 +123,8 @@ class MidiTokenizer:
         return [self.id_to_token.get(i, "UNK") for i in ids]
 
 
-def _file_to_samples(file_path, tokenizer, seq_len):
-    seq = tokenizer.encode_midi(file_path)
-    pad_id = tokenizer.token_to_id["PAD"]
-
-    if len(seq) < seq_len + 1:
-        seq = seq + [pad_id] * (seq_len + 1 - len(seq))
-
-    arr = np.asarray(seq, dtype=np.int64)
-    windows = np.lib.stride_tricks.sliding_window_view(arr, seq_len + 1)
-    x = torch.from_numpy(windows[:, :-1].copy())
-    y = torch.from_numpy(windows[:, 1:].copy())
-    return list(zip(x.unbind(0), y.unbind(0)))
-
+def _file_to_seq(file_path, tokenizer):
+    return tokenizer.encode_midi(file_path)
 
 class MidiDataset(Dataset):
 
@@ -148,25 +138,37 @@ class MidiDataset(Dataset):
         if num_workers is None:
             num_workers = min(32, os.cpu_count() or 4)
 
-        worker = partial(_file_to_samples, tokenizer=tokenizer, seq_len=seq_len)
-        self.samples = []
+        worker = partial(_file_to_seq, tokenizer=tokenizer)
 
-        num_workers = min(32, os.cpu_count() or 4)
+        seqs = []
 
         with ProcessPoolExecutor(max_workers=num_workers) as pool:
-            for batch in tqdm(
+            for seq in tqdm(
                 pool.map(worker, files),
                 total=len(files),
                 desc="Loading MIDI",
                 unit="file",
             ):
-                self.samples.extend(batch)
+                seqs.append(seq)
+
+        all_tokens = []
+        eos = tokenizer.token_to_id["EOS"]
+
+        for seq in seqs:
+            all_tokens.extend(seq)
+            all_tokens.append(eos)
+
+        arr = np.asarray(all_tokens, dtype=np.int64)
+        windows = np.lib.stride_tricks.sliding_window_view(arr, seq_len + 1)
+
+        self.x = torch.from_numpy(windows[:, :-1].copy())
+        self.y = torch.from_numpy(windows[:, 1:].copy())
 
     def __len__(self):
-        return len(self.samples)
+        return self.x.size(0)
 
     def __getitem__(self, idx):
-        return self.samples[idx]
+        return self.x[idx], self.y[idx]
 
 
 # dataset_train = MIDIDataset(
