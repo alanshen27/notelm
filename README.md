@@ -44,7 +44,7 @@ uv venv && source .venv/bin/activate
 uv pip install torch pretty_midi tqdm
 ```
 
-Download MAESTRO and place files under `data/maestro-v3.0.0/` (gitignored). Training currently reads from `data/maestro-v3.0.0/test/`.
+Download MAESTRO and place files under `data/maestro-v3.0.0/` (gitignored). Training reads from `data/maestro-v3.0.0/2004/` by default (edit `DATA_DIR` in `src/utils/data.py` to change).
 
 ## Training
 

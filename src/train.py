@@ -6,6 +6,8 @@ import time
 
 EPOCHS = 320
 WEIGHTS_PATH = "weights.pt"
+BATCH_SIZE = 2
+PAD_ID = tokenizer.token_to_id["PAD"]
 
 device = (
     "cuda" if torch.cuda.is_available()
@@ -22,7 +24,8 @@ try:
         val_dataset,
         tokenizer.vocab_size,
         device,
-        2,
+        PAD_ID,
+        BATCH_SIZE,
     ).to(device)
 
     model.fit(epochs=EPOCHS)

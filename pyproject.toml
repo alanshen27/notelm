@@ -5,5 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "torch>=2.0",
+    "pretty_midi>=0.2.11",
     "tqdm>=4.66",
 ]

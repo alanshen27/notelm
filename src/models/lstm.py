@@ -5,10 +5,8 @@ from pathlib import Path
 import datetime
 from tqdm import tqdm
 
-loss_fn = nn.CrossEntropyLoss()
-
 class LSTM (nn.Module):
-    def __init__(self, train, val, vocab_size, device, batch_size = 2):
+    def __init__(self, train, val, vocab_size, device, pad_id, batch_size=2):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, 128)
         self.lstm = nn.LSTM(128, 512, batch_first=True)
@@ -16,9 +14,10 @@ class LSTM (nn.Module):
 
         self.optimizer = optim.Adam(self.parameters(), lr=0.001)
         self.train_data = DataLoader(train, batch_size, shuffle=True)
-        self.val_data = DataLoader(val, batch_size, shuffle=True)
+        self.val_data = DataLoader(val, batch_size, shuffle=False)
         self.vocab_size = vocab_size
         self.device = device
+        self.loss_fn = nn.CrossEntropyLoss(ignore_index=pad_id)
 
     def forward(self, x, hidden = None):
         embedding = self.embedding(x)
@@ -29,7 +28,7 @@ class LSTM (nn.Module):
 
         return logits
 
-    def train_unit(self, epoch_bar):
+    def train_unit(self):
         self.train()
         running_loss = 0.
 
@@ -47,7 +46,7 @@ class LSTM (nn.Module):
 
             logits = self(inputs)
 
-            loss = loss_fn(logits.reshape(-1, self.vocab_size), labels.reshape(-1))
+            loss = self.loss_fn(logits.reshape(-1, self.vocab_size), labels.reshape(-1))
             loss.backward()
 
             self.optimizer.step()
@@ -71,7 +70,7 @@ class LSTM (nn.Module):
             ):
                 logits = self(inputs.to(self.device))
 
-                loss = loss_fn(
+                loss = self.loss_fn(
                     logits.reshape(-1, self.vocab_size),
                     labels.to(self.device).reshape(-1)
                 )
@@ -91,7 +90,7 @@ class LSTM (nn.Module):
         print("Begin training")
         epoch_bar = tqdm(range(epochs), desc="epochs", unit="epoch")
         for epoch in epoch_bar:
-            train_loss = self.train_unit(epoch_bar)
+            train_loss = self.train_unit()
             val_loss = self.validate()
 
             epoch_bar.set_postfix(
