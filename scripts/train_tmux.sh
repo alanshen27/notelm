@@ -21,7 +21,7 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
   exit 1
 fi
 
-CMD="cd '$ROOT' && source .venv/bin/activate && cd src && python -u train.py 2>&1 | tee -a '$LOG_FILE'"
+CMD="cd '$ROOT' && source .venv/bin/activate && [[ -f .env ]] && set -a && source .env && set +a; cd src && python -u train.py 2>&1 | tee -a '$LOG_FILE'"
 
 tmux new-session -d -s "$SESSION" "$CMD"
 

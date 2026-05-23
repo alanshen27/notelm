@@ -3,7 +3,7 @@ from torch.utils.data import random_split, DataLoader
 
 tokenizer = MidiTokenizer()
 
-dataset = MidiDataset("data/maestro-v3.0.0/test", tokenizer, seq_len=4096)
+dataset = MidiDataset("data/maestro-v3.0.0/2004", tokenizer, seq_len=4096)
 
 train_size = int(0.9 * len(dataset))
 val_size = len(dataset) - train_size

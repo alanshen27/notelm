@@ -62,6 +62,17 @@ tmux attach -t notelm-train
 
 Final weights are written to `src/weights.pt`.
 
+## Email notification
+
+Copy `.env.example` to `.env` and fill in your SMTP credentials. Training sends an email on success or failure.
+
+```bash
+cp .env.example .env
+# Gmail: use an app password (Google Account → Security → App passwords)
+```
+
+Required vars: `NOTIFY_EMAIL`, `SMTP_PASS`. Optional: `SMTP_HOST` (default `smtp.gmail.com`), `SMTP_PORT` (default `587`), `SMTP_USER` (defaults to `NOTIFY_EMAIL`).
+
 ## Layout
 
 ```

@@ -1,6 +1,11 @@
 from utils.data import tokenizer, train_dataset, val_dataset
+from utils.notify import notify_training_complete
 from models.lstm import LSTM
 import torch
+import time
+
+EPOCHS = 320
+WEIGHTS_PATH = "weights.pt"
 
 device = (
     "cuda" if torch.cuda.is_available()
@@ -8,19 +13,35 @@ device = (
     else "cpu"
 )
 
-model = LSTM(
-    train_dataset,
-    val_dataset,
-    tokenizer.vocab_size,
-    device,
-    2
-).to(device)
-
 print("Using device:", device)
 
-model.fit(epochs=10) 
+start = time.time()
+try:
+    model = LSTM(
+        train_dataset,
+        val_dataset,
+        tokenizer.vocab_size,
+        device,
+        2,
+    ).to(device)
 
-torch.save(
-    model.state_dict(),
-    "weights.pt"
-)
+    model.fit(epochs=EPOCHS)
+
+    torch.save(model.state_dict(), WEIGHTS_PATH)
+
+    notify_training_complete(
+        success=True,
+        epochs=EPOCHS,
+        device=device,
+        elapsed_s=time.time() - start,
+        weights_path=WEIGHTS_PATH,
+    )
+except Exception as exc:
+    notify_training_complete(
+        success=False,
+        epochs=EPOCHS,
+        device=device,
+        elapsed_s=time.time() - start,
+        error=str(exc),
+    )
+    raise
