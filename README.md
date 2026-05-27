@@ -39,12 +39,21 @@ Checkpoints are saved per epoch under `checkpoints/epoch-{n}/`.
 
 ## Setup
 
+One-shot bootstrap (installs [uv](https://docs.astral.sh/uv/), Python 3.13, deps, training dirs):
+
 ```bash
-uv venv && source .venv/bin/activate
-uv pip install torch pretty_midi tqdm
+./scripts/setup.sh --fetch-maestro
 ```
 
-Download MAESTRO and place files under `data/maestro-v3.0.0/` (gitignored). Training reads from `data/maestro-v3.0.0/2004/` by default (edit `DATA_DIR` in `src/utils/data.py` to change).
+On an NVIDIA GPU machine, add CUDA PyTorch wheels:
+
+```bash
+./scripts/setup.sh --fetch-maestro --cuda
+```
+
+Other flags: `--lab` (music21 + npm UI deps), `--cpu` (skip CUDA wheels). Run `./scripts/setup.sh --help` for details.
+
+MAESTRO can also be placed manually under `data/maestro-v3.0.0/` (gitignored). Training reads from `data/maestro-v3.0.0/2004/` by default (edit `DATA_DIR` in `src/utils/data.py` to change).
 
 ## Training
 
@@ -112,5 +121,6 @@ src/
     midi_fmt.py     # tokenizer + dataset
     data.py         # train/val split
 scripts/
+  setup.sh          # uv + deps + optional MAESTRO/CUDA
   train_tmux.sh     # background training
 ```
