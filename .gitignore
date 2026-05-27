@@ -9,5 +9,8 @@ wheels/
 # Virtual environments
 .venv
 .env
+outputs/
+ui/node_modules/
+ui/dist/
 .DS_STORE
 .python-version

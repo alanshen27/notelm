@@ -1,0 +1,94 @@
+:root {
+  --bg: #f8f7f4;
+  --paper: #fffef9;
+  --ink: #1a1a18;
+  --muted: #5c5c56;
+  --border: #d4d0c8;
+  --accent: #2a4a6b;
+  --accent-soft: #e8eef4;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "IBM Plex Serif", Georgia, serif;
+  background: var(--bg);
+  color: var(--ink);
+  line-height: 1.5;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 13px;
+}
+
+button {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--paper);
+  color: var(--ink);
+  padding: 8px 14px;
+  border-radius: 2px;
+}
+
+button:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+button.primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+button.primary:hover {
+  background: #1e3a52;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+input[type="text"],
+input[type="number"],
+select {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--paper);
+}
+
+input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+label {
+  display: block;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.field {
+  margin-bottom: 16px;
+}
+
+.field .value {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  color: var(--accent);
+  margin-top: 4px;
+}

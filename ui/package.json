@@ -1,0 +1,22 @@
+{
+  "name": "notelm-lab",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@tonejs/midi": "^2.0.28",
+    "opensheetmusicdisplay": "^1.9.9",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tone": "^15.0.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^6.0.0"
+  }
+}

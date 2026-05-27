@@ -23,7 +23,7 @@ Events are derived from `pretty_midi` and mapped to a fixed vocabulary:
 | `TIME_SHIFT_{steps}` | Relative time, 20 ms steps (max 2 s) |
 | `BOS`, `EOS`, `PAD`, `UNK` | Sequence control |
 
-Default sequence length: **4096** tokens. Windows are extracted with stride 1.
+Default sequence length: **4096** tokens. Windows use stride **2048** (half overlap). Train/val split is by MIDI file, not by window.
 
 ## Model
 
@@ -62,6 +62,32 @@ tmux attach -t notelm-train
 
 Final weights are written to `src/weights.pt`.
 
+## Inference lab (React)
+
+Research-oriented UI: sampling controls, token statistics, in-browser MIDI playback, run logs.
+
+```bash
+./scripts/run_lab.sh
+# open http://localhost:8000
+```
+
+Dev mode (hot reload UI):
+
+```bash
+# terminal 1
+cd src && uvicorn api:app --reload --port 8000
+
+# terminal 2
+cd ui && npm install && npm run dev
+# open http://localhost:5173
+```
+
+Each run saves `outputs/<run_id>/generated.midi` and `run.json` (full token list + params).
+
+**Sheet music:** §4 Notation renders the first 32 measures via MusicXML (requires `uv pip install music21`). Automatic MIDI→score transcription; fine for inspection, not publication quality.
+
+Legacy Gradio UI: `cd src && python app.py` (port 7860).
+
 ## Email notification
 
 Copy `.env.example` to `.env` and fill in your SMTP credentials. Training sends an email on success or failure.
@@ -78,6 +104,9 @@ Required vars: `NOTIFY_EMAIL`, `SMTP_PASS`. Optional: `SMTP_HOST` (default `smtp
 ```
 src/
   train.py          # entry point
+  api.py            # FastAPI inference lab backend
+  app.py            # legacy Gradio UI
+  inference.py      # load checkpoint + generate
   models/lstm.py    # LSTM + training loop
   utils/
     midi_fmt.py     # tokenizer + dataset

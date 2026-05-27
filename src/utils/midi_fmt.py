@@ -2,8 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import os
 from functools import partial
-from concurrent.futures import ProcessPoolExecutor
-from torch._tensor import Tensor
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pretty_midi
@@ -122,17 +121,90 @@ class MidiTokenizer:
     def decode_tokens(self, ids):
         return [self.id_to_token.get(i, "UNK") for i in ids]
 
+    def tokens_to_midi(self, ids, output_path):
+        tokens = self.decode_tokens(ids)
+        step_sec = self.cfg.time_step_ms / 1000.0
+
+        current_time = 0.0
+        pending_velocity = 64
+        active = {}
+
+        midi = pretty_midi.PrettyMIDI()
+        instrument = pretty_midi.Instrument(program=0)
+
+        for tok in tokens:
+            if tok in ("BOS", "PAD", "UNK"):
+                continue
+            if tok == "EOS":
+                break
+            if tok.startswith("TIME_SHIFT_"):
+                steps = int(tok.rsplit("_", 1)[-1])
+                current_time += steps * step_sec
+            elif tok.startswith("VELOCITY_"):
+                bin_idx = int(tok.rsplit("_", 1)[-1])
+                pending_velocity = min(
+                    127,
+                    int((bin_idx + 0.5) * 128 / self.cfg.velocity_bins),
+                )
+            elif tok.startswith("NOTE_ON_"):
+                pitch = int(tok.rsplit("_", 1)[-1])
+                active[pitch] = (current_time, pending_velocity)
+            elif tok.startswith("NOTE_OFF_"):
+                pitch = int(tok.rsplit("_", 1)[-1])
+                if pitch in active:
+                    start, vel = active.pop(pitch)
+                    instrument.notes.append(
+                        pretty_midi.Note(
+                            velocity=vel,
+                            pitch=pitch,
+                            start=start,
+                            end=max(start + 0.05, current_time),
+                        )
+                    )
+
+        for pitch, (start, vel) in active.items():
+            instrument.notes.append(
+                pretty_midi.Note(
+                    velocity=vel,
+                    pitch=pitch,
+                    start=start,
+                    end=start + 0.5,
+                )
+            )
+
+        midi.instruments.append(instrument)
+        midi.write(str(output_path))
+        return output_path
+
 
 def _file_to_seq(file_path, tokenizer):
     return tokenizer.encode_midi(file_path)
 
 class MidiDataset(Dataset):
 
-    def __init__(self, midi_folder, tokenizer, seq_len=100, num_workers=None):
+    def __init__(
+        self,
+        tokenizer,
+        seq_len=100,
+        *,
+        midi_folder=None,
+        files=None,
+        stride=None,
+        num_workers=None,
+        desc="Loading MIDI",
+    ):
+        if files is None:
+            if midi_folder is None:
+                raise ValueError("Provide midi_folder or files")
+            files = sorted(Path(midi_folder).glob("*.midi"))
+        else:
+            files = [Path(p) for p in files]
 
-        files = sorted(Path(midi_folder).glob("*.midi"))
+        self.seq_len = seq_len
+        self.stride = stride if stride is not None else max(1, seq_len // 2)
+
         if not files:
-            self.samples = []
+            self.tokens = torch.empty(0, dtype=torch.int64)
             return
 
         if num_workers is None:
@@ -142,31 +214,33 @@ class MidiDataset(Dataset):
 
         seqs = []
 
-        with ProcessPoolExecutor(max_workers=num_workers) as pool:
+        with ThreadPoolExecutor(max_workers=num_workers) as pool:
             for seq in tqdm(
                 pool.map(worker, files),
                 total=len(files),
-                desc="Loading MIDI",
+                desc=desc,
                 unit="file",
             ):
                 seqs.append(seq)
 
         all_tokens = []
-        eos = tokenizer.token_to_id["EOS"]
-
         for seq in seqs:
             all_tokens.extend(seq)
-            all_tokens.append(eos)
 
         all_tokens = np.asarray(all_tokens, dtype=np.int64)
         self.tokens = torch.from_numpy(all_tokens)
-        self.seq_len = seq_len
+
     def __len__(self):
-        return len(self.tokens) - self.seq_len
+        n = len(self.tokens) - self.seq_len
+        if n < 0:
+            return 0
+        return n // self.stride + 1
 
     def __getitem__(self, idx):
-        x = self.tokens[idx:idx+self.seq_len]
-        y = self.tokens[idx+1:idx+self.seq_len+1]
+        start = idx * self.stride
+        end = start + self.seq_len
+        x = self.tokens[start:end]
+        y = self.tokens[start + 1 : end + 1]
         return x, y
 
 
