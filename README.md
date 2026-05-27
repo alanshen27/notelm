@@ -45,10 +45,16 @@ One-shot bootstrap (installs [uv](https://docs.astral.sh/uv/), Python 3.13, deps
 ./scripts/setup.sh --fetch-maestro
 ```
 
-On an NVIDIA GPU machine, add CUDA PyTorch wheels:
+On an NVIDIA GPU machine (Linux), use CUDA 12.4 PyTorch wheels — **required** for CUDA 12.x drivers. Plain PyPI `torch` on Linux targets CUDA 13 and will fall back to CPU:
 
 ```bash
 ./scripts/setup.sh --fetch-maestro --cuda
+```
+
+If you already installed and see a CUDA driver warning, run:
+
+```bash
+./scripts/fix_cuda_torch.sh
 ```
 
 Other flags: `--lab` (music21 + npm UI deps), `--cpu` (skip CUDA wheels). Run `./scripts/setup.sh --help` for details.
@@ -59,6 +65,15 @@ MAESTRO can also be placed manually under `data/maestro-v3.0.0/` (gitignored). T
 
 ```bash
 cd src && python train.py
+```
+
+Resume from epoch 40 (loads latest `.pt` in `checkpoints/epoch-40/`, next checkpoint is `epoch-41/`):
+
+```bash
+cd src && python train.py --epoch 40
+# equivalent:
+python train.py --weights epoch-40
+python train.py -w ../checkpoints/epoch-40/20260527-132949.pt
 ```
 
 Long runs (detachable session + log file):

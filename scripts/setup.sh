@@ -44,6 +44,12 @@ warn() { printf 'warning: %s\n' "$*" >&2; }
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+configure_uv() {
+  ensure_path
+  # Avoid slow hardlink-then-copy when cache and .venv are on different filesystems.
+  export UV_LINK_MODE="${UV_LINK_MODE:-copy}"
+}
+
 ensure_path() {
   export PATH="${HOME}/.local/bin:${PATH}"
 }
@@ -78,20 +84,36 @@ install_python() {
 }
 
 sync_deps() {
-  ensure_path
-  log "Creating venv and installing dependencies (uv sync)..."
-  uv sync
+  configure_uv
+  local -a uv_args=()
+  if want_cuda; then
+    # PyPI Linux torch pulls many NVIDIA libs; install one CUDA wheel instead.
+    uv_args=(--no-install-package torch)
+    log "Installing dependencies (CUDA PyTorch follows separately)..."
+    log "PyTorch CUDA wheel is ~2–3 GB — 5–15 minutes on slow or network storage is normal."
+  else
+    log "Installing dependencies (uv sync)..."
+    log "On Linux, the PyTorch wheel is large; first install may take several minutes."
+  fi
+
+  uv sync "${uv_args[@]}"
+
+  if want_cuda; then
+    install_cuda_torch
+  fi
 
   if $INSTALL_LAB; then
     log "Installing optional score deps (music21)..."
-    uv sync --extra score
+    uv sync --extra score "${uv_args[@]}"
   fi
 }
 
 install_cuda_torch() {
-  ensure_path
-  log "Installing PyTorch CUDA wheels (cu124)..."
-  uv pip install --upgrade "torch>=2.0" --index-url "${TORCH_CUDA_INDEX}"
+  configure_uv
+  log "Installing PyTorch CUDA 12.4 wheels (matches CUDA 12.x drivers)..."
+  # Drop PyPI CUDA-13 torch + nvidia-* stack if a plain uv sync installed them.
+  uv pip uninstall -y torch 2>/dev/null || true
+  uv pip install --reinstall "torch==2.12.0" --index-url "${TORCH_CUDA_INDEX}"
 }
 
 want_cuda() {
@@ -184,6 +206,18 @@ if torch.cuda.is_available():
 else:
     print()
 
+import shutil
+
+if not torch.cuda.is_available() and shutil.which("nvidia-smi"):
+    print(
+        "\nERROR: NVIDIA GPU detected but PyTorch CUDA is not working.\n"
+        "Linux PyPI torch often needs CUDA 13 drivers; this project uses cu124 instead.\n"
+        "Fix:  ./scripts/setup.sh --cuda\n"
+        "  or:  uv pip install --reinstall 'torch==2.12.0' "
+        "--index-url https://download.pytorch.org/whl/cu124\n"
+    )
+    sys.exit(1)
+
 midi_count = len(list(DATA_DIR.glob("*.midi"))) if DATA_DIR.is_dir() else 0
 print(f"  Data:    {DATA_DIR} ({midi_count} .midi files)")
 print(f"  seq_len: {SEQ_LEN}")
@@ -206,13 +240,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 log "notelm setup (root: $ROOT)"
+configure_uv
 install_uv
 install_python
 sync_deps
 
-if want_cuda; then
-  install_cuda_torch
-else
+if ! want_cuda; then
   log "Using PyPI PyTorch (CPU/MPS). Pass --cuda on NVIDIA machines for GPU training."
 fi
 

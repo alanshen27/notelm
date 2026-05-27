@@ -127,18 +127,25 @@ class LSTM(MidiLSTM):
         torch.save(self.state_dict(), path)
         return path
 
-    def fit(self, epochs):
+    def fit(self, epochs, start_epoch=0):
+        if start_epoch < 0 or start_epoch >= epochs:
+            raise ValueError(
+                f"start_epoch must be in [0, {epochs}), got {start_epoch}"
+            )
+
         ckpt_root = Path("checkpoints").resolve()
         batches_per_epoch = len(self.train_data)
         eff_batch = self.train_data.batch_size * self.accum_steps
+        remaining = epochs - start_epoch
         print(
-            f"Begin training: {epochs} epochs, "
+            f"Begin training: epochs {start_epoch + 1}–{epochs} "
+            f"({remaining} remaining), "
             f"{batches_per_epoch:,} train batches/epoch "
             f"(micro-batch {self.train_data.batch_size}, "
             f"effective {eff_batch}), "
             f"checkpoints -> {ckpt_root}/"
         )
-        epoch_bar = tqdm(range(epochs), desc="epochs", unit="epoch")
+        epoch_bar = tqdm(range(start_epoch, epochs), desc="epochs", unit="epoch")
         for epoch in epoch_bar:
             train_loss = self.train_unit()
             val_loss = self.validate()
