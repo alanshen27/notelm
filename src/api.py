@@ -22,7 +22,8 @@ from inference import (
     resolve_checkpoint,
 )
 from score import MAX_MEASURES, midi_to_musicxml, score_backend_available
-from utils.checkpoints import infer_model_from_path, infer_tokenizer_from_path
+from utils.checkpoints import MODEL_NAMES, infer_model_from_path, infer_tokenizer_from_path
+from utils.tokenizers import TOKENIZER_NAMES, BaseMidiTokenizer
 
 SRC = Path(__file__).resolve().parent
 PROJECT = SRC.parent
@@ -67,6 +68,8 @@ def health():
         "search_roots": [str(r) for r in _search_roots()],
         "ui_built": UI_DIST.exists(),
         "score_backend": score_backend_available(),
+        "models": list(MODEL_NAMES),
+        "tokenizers": list(TOKENIZER_NAMES),
     }
 
 
@@ -101,9 +104,15 @@ async def generate(
     seed_midi: UploadFile | None = File(None),
 ):
     try:
-        (model, tokenizer), ckpt_path = _get_model(checkpoint)
+        (nn, tokenizer), ckpt_path = _get_model(checkpoint)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except NotImplementedError as exc:
+        raise HTTPException(status_code=501, detail=str(exc)) from exc
+
+    ckpt_path_obj = Path(ckpt_path)
+    model_name = infer_model_from_path(ckpt_path_obj)
+    tokenizer_name = tokenizer.name
 
     run_id = str(uuid.uuid4())[:8]
     run_dir = OUTPUTS / run_id
@@ -116,7 +125,7 @@ async def generate(
 
     device = get_device()
     tokens = generate_tokens(
-        model,
+        nn,
         tokenizer,
         max_new_tokens=max_new_tokens,
         temperature=temperature,
@@ -137,6 +146,8 @@ async def generate(
 
     params = {
         "checkpoint": ckpt_path,
+        "model": model_name,
+        "tokenizer": tokenizer_name,
         "max_new_tokens": max_new_tokens,
         "temperature": temperature,
         "top_k": top_k,
@@ -148,6 +159,8 @@ async def generate(
         "run_id": run_id,
         "created": datetime.now(timezone.utc).isoformat(),
         "device": str(device),
+        "model": model_name,
+        "tokenizer": tokenizer_name,
         "params": params,
         "stats": _token_stats(tokenizer, tokens),
         "tokens_preview": preview,

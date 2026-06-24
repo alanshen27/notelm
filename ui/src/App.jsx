@@ -11,12 +11,20 @@ const DEFAULTS = {
   context_len: 256,
 };
 
+function checkpointLabel(c) {
+  const tag = [c.model, c.tokenizer].filter(Boolean).join("/");
+  const tail = [c.parent, c.name].filter(Boolean).join("/");
+  return tag ? `${tag} · ${tail}` : tail;
+}
+
 export default function App() {
   const [health, setHealth] = useState(null);
   const [checkpoints, setCheckpoints] = useState([]);
   const [searchRoots, setSearchRoots] = useState([]);
   const [checkpoint, setCheckpoint] = useState("");
   const [customPath, setCustomPath] = useState("");
+  const [filterModel, setFilterModel] = useState("");
+  const [filterTokenizer, setFilterTokenizer] = useState("");
   const [params, setParams] = useState(DEFAULTS);
   const [seedFile, setSeedFile] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -38,6 +46,20 @@ export default function App() {
   }, []);
 
   const activeCheckpoint = customPath.trim() || checkpoint;
+
+  const modelOptions = [
+    ...new Set(checkpoints.map((c) => c.model).filter(Boolean)),
+  ].sort();
+  const tokenizerOptions = [
+    ...new Set(checkpoints.map((c) => c.tokenizer).filter(Boolean)),
+  ].sort();
+  const filteredCheckpoints = checkpoints.filter((c) => {
+    if (filterModel && c.model !== filterModel) return false;
+    if (filterTokenizer && c.tokenizer !== filterTokenizer) return false;
+    return true;
+  });
+
+  const selectedMeta = checkpoints.find((c) => c.path === checkpoint);
 
   const run = async (e) => {
     e.preventDefault();
@@ -87,6 +109,38 @@ export default function App() {
       <form className="grid" onSubmit={run}>
         <section className="panel">
           <h2>§1 Checkpoint</h2>
+          <div className="field-row">
+            <div className="field">
+              <label htmlFor="filter-model">Model</label>
+              <select
+                id="filter-model"
+                value={filterModel}
+                onChange={(e) => setFilterModel(e.target.value)}
+              >
+                <option value="">all</option>
+                {(health?.models ?? modelOptions).map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="filter-tok">Tokenizer</label>
+              <select
+                id="filter-tok"
+                value={filterTokenizer}
+                onChange={(e) => setFilterTokenizer(e.target.value)}
+              >
+                <option value="">all</option>
+                {(health?.tokenizers ?? tokenizerOptions).map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
           <div className="field">
             <label htmlFor="ckpt-select">Detected weights</label>
             <select
@@ -95,19 +149,25 @@ export default function App() {
               onChange={(e) => setCheckpoint(e.target.value)}
             >
               <option value="">— select —</option>
-              {checkpoints.map((c) => (
+              {filteredCheckpoints.map((c) => (
                 <option key={c.path} value={c.path}>
-                  {c.parent}/{c.name}
+                  {checkpointLabel(c)}
                 </option>
               ))}
             </select>
           </div>
+          {selectedMeta && (
+            <p className="ckpt-meta mono">
+              {selectedMeta.model}/{selectedMeta.tokenizer} · {selectedMeta.parent}/
+              {selectedMeta.name}
+            </p>
+          )}
           <div className="field">
             <label htmlFor="ckpt-path">Or absolute path</label>
             <input
               id="ckpt-path"
               type="text"
-              placeholder="/notelm/checkpoints/epoch-1/….pt"
+              placeholder="/notelm/src/checkpoints/lstm/event/epoch-1/….pt"
               value={customPath}
               onChange={(e) => setCustomPath(e.target.value)}
             />
@@ -207,6 +267,14 @@ export default function App() {
           <h2>§4 Output — run {result.run_id}</h2>
           <div className="meta-grid mono">
             <div>
+              <span className="meta-label">model</span>
+              <span>{result.model}</span>
+            </div>
+            <div>
+              <span className="meta-label">tokenizer</span>
+              <span>{result.tokenizer}</span>
+            </div>
+            <div>
               <span className="meta-label">checkpoint</span>
               <span>{result.params.checkpoint}</span>
             </div>
@@ -259,7 +327,7 @@ export default function App() {
       )}
 
       <footer className="footer mono">
-        LSTM · event vocabulary · teacher forcing · MAESTRO
+        LSTM · event / raw / remi / piano_roll · MAESTRO
       </footer>
     </div>
   );
