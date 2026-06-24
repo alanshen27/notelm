@@ -14,14 +14,25 @@ Training uses teacher forcing on sliding windows extracted from [MAESTRO v3.0.0]
 
 ## Tokenization
 
-Events are derived from `pretty_midi` and mapped to a fixed vocabulary:
+Global grid: **`TIMESTEP_MS = 20`** in `src/utils/midi_timing.py` (all formats quantize to this step).
 
-| Token type | Description |
+Choose tokenizer via env or `utils/data.py`:
+
+```bash
+export NOTELM_TOKENIZER=event   # default — NOTE_ON/OFF + TIME_SHIFT
+export NOTELM_TOKENIZER=raw     # DELTA + MSG_NOTE_ON/OFF + PITCH + VEL
+export NOTELM_TOKENIZER=remi    # Bar + Position + Pitch + Velocity + Duration
+export NOTELM_TOKENIZER=piano_roll  # per-timestep TS_STEP + active PITCH/VEL
+```
+
+| Name | Description |
 |---|---|
-| `NOTE_ON_{pitch}` / `NOTE_OFF_{pitch}` | Piano range A0–C8 (21–108) |
-| `VELOCITY_{bin}` | 16-bin quantization of MIDI velocity |
-| `TIME_SHIFT_{steps}` | Relative time, 20 ms steps (max 2 s) |
-| `BOS`, `EOS`, `PAD`, `UNK` | Sequence control |
+| `event` | `NOTE_ON_{pitch}` / `NOTE_OFF_{pitch}`, `VELOCITY_{bin}`, `TIME_SHIFT_{steps}` |
+| `raw` | Chronological raw messages with `DELTA_{steps}` |
+| `remi` | REMI-style: `Bar_*`, `Position_*`, `Pitch_*`, `Velocity_*`, `Duration_*` (no note-off) |
+| `piano_roll` | Per timestep: `TS_STEP` then `PITCH_*` / `VEL_*`; also `encode_piano_roll()` → `(T, 88)` matrix |
+
+**Note:** Checkpoints are tied to the tokenizer used in training — switch tokenizer only with a new training run.
 
 Default sequence length: **4096** tokens. Windows use stride **2048** (half overlap). Train/val split is by MIDI file, not by window.
 
@@ -35,7 +46,7 @@ Default sequence length: **4096** tokens. Windows use stride **2048** (half over
 | Optimizer | Adam, lr = 1e-3 |
 | Loss | Cross-entropy (token-level) |
 
-Checkpoints are saved per epoch under `checkpoints/epoch-{n}/`.
+Checkpoints are saved per **model** and **tokenizer**: `checkpoints/{model}/{tokenizer}/epoch-{n}/`.
 
 ## Setup
 
@@ -44,6 +55,16 @@ One-shot bootstrap (installs [uv](https://docs.astral.sh/uv/), Python 3.13, deps
 ```bash
 ./scripts/setup.sh --fetch-maestro
 ```
+
+**Linux GPU server** (tmux, curl, unzip, CUDA PyTorch, MAESTRO):
+
+```bash
+./scripts/setup_linux.sh
+# same as:
+./scripts/setup.sh --system --fetch-maestro --cuda
+```
+
+`--system` uses apt/dnf/apk to install **tmux**, **curl**, **unzip** (needs sudo on most hosts; works as root in Docker).
 
 On an NVIDIA GPU machine (Linux), use CUDA 12.4 PyTorch wheels — **required** for CUDA 12.x drivers. Plain PyPI `torch` on Linux targets CUDA 13 and will fall back to CPU:
 
@@ -64,17 +85,35 @@ MAESTRO can also be placed manually under `data/maestro-v3.0.0/` (gitignored). T
 ## Training
 
 ```bash
-cd src && python train.py
+cd src && python train.py                    # event (default)
+python train.py --tokenizer remi             # one format
+python train.py --all-tokenizers             # event, raw, remi, piano_roll
+python train.py --all-tokenizers --only raw,remi,piano_roll
+./scripts/train_all_tokenizers.sh
 ```
 
-Resume from epoch 40 (loads latest `.pt` in `checkpoints/epoch-40/`, next checkpoint is `epoch-41/`):
+Each model + input format gets its own tree (no collisions between LSTM and transformer):
+
+```
+checkpoints/
+  lstm/
+    event/epoch-1/...  weights.pt
+    raw/
+    remi/
+    piano_roll/
+  transformer/         # reserved for future training
+    event/
+    ...
+```
+
+Legacy: `checkpoints/epoch-N/`, `checkpoints/event/`, `weights-event.pt` still load (assumed LSTM + event).
 
 ```bash
-cd src && python train.py --epoch 40
-# equivalent:
-python train.py --weights epoch-40
-python train.py -w ../checkpoints/epoch-40/20260527-132949.pt
+cd src && python train.py --model lstm --tokenizer remi
+python train.py --model lstm --all-tokenizers
 ```
+
+Resume: `python train.py --model lstm --tokenizer remi --epoch 40`
 
 Long runs (detachable session + log file):
 

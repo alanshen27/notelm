@@ -7,6 +7,7 @@ cd "$ROOT"
 
 FETCH_MAESTRO=false
 INSTALL_LAB=false
+INSTALL_SYSTEM=false
 CPU_ONLY=false
 FORCE_CUDA=false
 
@@ -27,8 +28,12 @@ Options:
   --cuda          Install PyTorch with CUDA 12.4 wheels (use on NVIDIA GPUs)
   --cpu           Keep CPU/MPS PyTorch from PyPI (no CUDA wheel reinstall)
   --fetch-maestro Download MAESTRO v3.0.0 MIDI (~120 MB) into data/
-  --lab           Also install music21 + build the React inference lab UI
+  --system        Install OS packages (Linux: tmux, curl, unzip via apt/dnf/apk)
+  --lab           Also install music21 + npm UI deps
   -h, --help      Show this help
+
+Linux GPU server (typical):
+  ./scripts/setup.sh --system --fetch-maestro --cuda
 
 After setup:
   source .venv/bin/activate
@@ -126,7 +131,48 @@ want_cuda() {
   have nvidia-smi && nvidia-smi >/dev/null 2>&1
 }
 
-fetch_maestro() {
+install_system_packages() {
+  local pkgs=(tmux curl unzip ca-certificates)
+  local missing=()
+  for cmd in tmux curl unzip; do
+    have "$cmd" || missing+=("$cmd")
+  done
+  if [[ ${#missing[@]} -eq 0 ]]; then
+    log "System tools already present (tmux, curl, unzip)"
+    return
+  fi
+
+  log "Installing system packages: ${pkgs[*]} ..."
+
+  run_as_root() {
+    if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+      "$@"
+    elif have sudo; then
+      sudo "$@"
+    else
+      warn "Need root or sudo to install: ${pkgs[*]}"
+      warn "On Debian/Ubuntu: sudo apt-get install -y ${pkgs[*]}"
+      return 1
+    fi
+  }
+
+  if have apt-get; then
+    run_as_root apt-get update -qq
+    run_as_root apt-get install -y "${pkgs[@]}"
+  elif have dnf; then
+    run_as_root dnf install -y tmux curl unzip ca-certificates
+  elif have yum; then
+    run_as_root yum install -y tmux curl unzip ca-certificates
+  elif have apk; then
+    run_as_root apk add --no-cache tmux curl unzip ca-certificates
+  else
+    warn "Unknown package manager — install manually: ${pkgs[*]}"
+    return 1
+  fi
+
+  log "System packages installed"
+}
+
   if [[ -d "$MAESTRO_DIR/2004" ]] && compgen -G "$MAESTRO_DIR/2004/*.midi" >/dev/null; then
     log "MAESTRO already present at $MAESTRO_DIR"
     return
@@ -173,6 +219,11 @@ setup_env_file() {
 
 setup_dirs() {
   mkdir -p "$ROOT/src/checkpoints" "$ROOT/logs" "$ROOT/data"
+  for model in lstm transformer; do
+    for tok in event raw remi piano_roll; do
+      mkdir -p "$ROOT/src/checkpoints/$model/$tok"
+    done
+  done
 }
 
 setup_lab_ui() {
@@ -196,7 +247,7 @@ sys.path.insert(0, str(Path("src").resolve()))
 
 import pretty_midi
 import torch
-from utils.data import DATA_DIR, SEQ_LEN
+from utils.data import DATA_DIR, seq_len_for
 
 print(f"  Python:  {sys.version.split()[0]}")
 print(f"  PyTorch: {torch.__version__}")
@@ -220,7 +271,7 @@ if not torch.cuda.is_available() and shutil.which("nvidia-smi"):
 
 midi_count = len(list(DATA_DIR.glob("*.midi"))) if DATA_DIR.is_dir() else 0
 print(f"  Data:    {DATA_DIR} ({midi_count} .midi files)")
-print(f"  seq_len: {SEQ_LEN}")
+print(f"  seq_len: {seq_len_for('event')} (event tokenizer)")
 
 if midi_count == 0:
     print("\nNo training MIDI found. Run with --fetch-maestro or add files under data/maestro-v3.0.0/")
@@ -233,6 +284,7 @@ while [[ $# -gt 0 ]]; do
     --cuda) FORCE_CUDA=true; shift ;;
     --cpu) CPU_ONLY=true; shift ;;
     --fetch-maestro) FETCH_MAESTRO=true; shift ;;
+    --system) INSTALL_SYSTEM=true; shift ;;
     --lab) INSTALL_LAB=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 1 ;;
@@ -241,6 +293,7 @@ done
 
 log "notelm setup (root: $ROOT)"
 configure_uv
+$INSTALL_SYSTEM && install_system_packages
 install_uv
 install_python
 sync_deps

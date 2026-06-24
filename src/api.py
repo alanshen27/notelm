@@ -22,7 +22,7 @@ from inference import (
     resolve_checkpoint,
 )
 from score import MAX_MEASURES, midi_to_musicxml, score_backend_available
-from utils.midi_fmt import MidiTokenizer
+from utils.checkpoints import infer_model_from_path, infer_tokenizer_from_path
 
 SRC = Path(__file__).resolve().parent
 PROJECT = SRC.parent
@@ -48,7 +48,7 @@ def _get_model(checkpoint: str):
     return _model_cache[ckpt], ckpt
 
 
-def _token_stats(tokenizer: MidiTokenizer, tokens: list[int]) -> dict:
+def _token_stats(tokenizer: BaseMidiTokenizer, tokens: list[int]) -> dict:
     names = tokenizer.decode_tokens(tokens)
     families = Counter(
         n.split("_")[0] if "_" in n else n for n in names
@@ -76,9 +76,13 @@ def checkpoints():
     items = []
     for p in paths:
         path = Path(p)
+        tok = infer_tokenizer_from_path(path)
+        model = infer_model_from_path(path)
         items.append({
             "path": p,
             "name": path.name,
+            "model": model,
+            "tokenizer": tok,
             "parent": path.parent.name,
             "modified": datetime.fromtimestamp(
                 path.stat().st_mtime, tz=timezone.utc

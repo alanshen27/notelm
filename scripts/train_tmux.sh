@@ -6,11 +6,11 @@ SESSION="notelm-train"
 LOG_DIR="$ROOT/logs"
 LOG_FILE="$LOG_DIR/train-$(date +%Y%m%d-%H%M%S).log"
 
-mkdir -p "$LOG_DIR" "$ROOT/src/checkpoints"
+mkdir -p "$LOG_DIR" "$ROOT/src/checkpoints"/{lstm,transformer}/{event,raw,remi,piano_roll}
 
 if ! command -v tmux >/dev/null 2>&1; then
   echo "tmux is not installed."
-  echo "Install with: brew install tmux"
+  echo "Install with: ./scripts/setup.sh --system"
   exit 1
 fi
 
@@ -21,7 +21,7 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
   exit 1
 fi
 
-CMD="cd '$ROOT' && source .venv/bin/activate && [[ -f .env ]] && set -a && source .env && set +a; cd src && python -u train.py 2>&1 | tee -a '$LOG_FILE'"
+CMD="cd '$ROOT' && source .venv/bin/activate && [[ -f .env ]] && set -a && source .env && set +a; cd src && python -u train.py $(printf '%q ' "$@") 2>&1 | tee -a '$LOG_FILE'"
 
 tmux new-session -d -s "$SESSION" "$CMD"
 

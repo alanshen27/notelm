@@ -34,11 +34,13 @@ class LSTM(MidiLSTM):
         batch_size=2,
         accum_steps=1,
         num_workers=0,
+        checkpoint_dir="checkpoints",
     ):
         super().__init__(vocab_size)
         self.optimizer = optim.Adam(self.parameters(), lr=0.001)
         self.device = device
         self.accum_steps = accum_steps
+        self.checkpoint_dir = Path(checkpoint_dir)
         self.loss_fn = nn.CrossEntropyLoss(ignore_index=pad_id)
 
         pin_memory = device == "cuda"
@@ -122,7 +124,7 @@ class LSTM(MidiLSTM):
 
     def _save_checkpoint(self, epoch):
         ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        path = Path(f"checkpoints/epoch-{epoch + 1}/{ts}.pt")
+        path = self.checkpoint_dir / f"epoch-{epoch + 1}" / f"{ts}.pt"
         path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(self.state_dict(), path)
         return path
@@ -133,7 +135,7 @@ class LSTM(MidiLSTM):
                 f"start_epoch must be in [0, {epochs}), got {start_epoch}"
             )
 
-        ckpt_root = Path("checkpoints").resolve()
+        ckpt_root = self.checkpoint_dir.resolve()
         batches_per_epoch = len(self.train_data)
         eff_batch = self.train_data.batch_size * self.accum_steps
         remaining = epochs - start_epoch

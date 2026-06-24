@@ -8,11 +8,18 @@ import torch
 
 from inference import resolve_checkpoint, _search_roots
 from models.lstm import LSTM
-from utils.data import load_datasets, tokenizer
+from utils.checkpoints import (
+    MODEL_NAMES,
+    checkpoint_dir,
+    default_model,
+    epoch_dir,
+    legacy_tokenizer_dir,
+    normalize_model,
+    weights_path as final_weights_path,
+)
+from utils.data import TRAIN_TOKENIZERS, load_datasets
 from utils.notify import notify_training_complete
-
-WEIGHTS_PATH = "weights.pt"
-PAD_ID = tokenizer.token_to_id["PAD"]
+from utils.tokenizers import TOKENIZER_NAMES
 
 
 def _nvidia_gpu_present() -> bool:
@@ -26,14 +33,11 @@ def _warn_cuda_driver_mismatch() -> None:
         return
     print(
         "\nWARNING: nvidia-smi works but PyTorch cannot use CUDA (training on CPU).\n"
-        "Common cause: PyPI torch on Linux bundles CUDA 13; your driver may be 12.x.\n"
         "Fix on this machine:  ./scripts/fix_cuda_torch.sh\n"
-        "  (needs torch+*cu124*, not plain PyPI torch with CUDA 13 libs)\n"
     )
 
 
 def _training_config(device: str) -> dict:
-    """Tune batch size from available device memory."""
     cpus = os.cpu_count() or 1
     if device == "cuda":
         gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
@@ -49,8 +53,13 @@ def _training_config(device: str) -> dict:
     return {"batch_size": 2, "accum_steps": 8, "num_workers": min(2, cpus)}
 
 
+def _paths_for_run(model_name: str, tokenizer_name: str) -> tuple[Path, Path]:
+    ckpt = checkpoint_dir(model_name, tokenizer_name)
+    ckpt.mkdir(parents=True, exist_ok=True)
+    return final_weights_path(model_name, tokenizer_name), ckpt
+
+
 def _infer_start_epoch(weights: Path) -> int | None:
-    """Epoch folder epoch-N means N epochs done; resume at 0-based index N."""
     for part in weights.parts:
         m = re.fullmatch(r"epoch-(\d+)", part, re.IGNORECASE)
         if m:
@@ -58,73 +67,178 @@ def _infer_start_epoch(weights: Path) -> int | None:
     return None
 
 
-def resolve_init_weights(spec: str) -> Path:
-    """Path to .pt, or shorthand like epoch-40 / 40 (latest checkpoint in that folder)."""
+def resolve_init_weights(spec: str, model_name: str, tokenizer_name: str) -> Path:
     raw = spec.strip()
     m = re.fullmatch(r"(?:epoch-)?(\d+)", raw, re.IGNORECASE)
     if m:
-        n = m.group(1)
+        n = int(m.group(1))
         for root in _search_roots():
-            folder = root / "checkpoints" / f"epoch-{n}"
-            if not folder.is_dir():
-                continue
-            pts = sorted(folder.glob("*.pt"), key=lambda p: p.stat().st_mtime, reverse=True)
-            if pts:
-                return pts[0].resolve()
+            for folder in (
+                root / epoch_dir(model_name, tokenizer_name, n),
+                root / legacy_tokenizer_dir(tokenizer_name) / f"epoch-{n}",
+                root / "checkpoints" / f"epoch-{n}",
+            ):
+                if not folder.is_dir():
+                    continue
+                pts = sorted(folder.glob("*.pt"), key=lambda p: p.stat().st_mtime, reverse=True)
+                if pts:
+                    return pts[0].resolve()
         raise FileNotFoundError(
-            f"No .pt checkpoint found under checkpoints/epoch-{n}/ "
-            f"(searched: {', '.join(str(r) for r in _search_roots())})"
+            f"No checkpoint for {model_name}/{tokenizer_name} epoch-{n} "
+            f"(also checked legacy layouts)"
         )
     return resolve_checkpoint(raw)
 
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Train notelm LSTM (optionally resume from a checkpoint).",
+        description="Train notelm (one or all tokenizers).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+        epilog=f"""
+models:     {", ".join(MODEL_NAMES)}
+tokenizers: {", ".join(TOKENIZER_NAMES)}
+
+checkpoints -> checkpoints/{{model}}/{{tokenizer}}/epoch-N/
+
 examples:
-  python train.py --epoch 40          # latest .pt in checkpoints/epoch-40/, continue as epoch 41
-  python train.py -w epoch-40         # same
-  python train.py -w checkpoints/epoch-40/20260527-132949.pt
-  python train.py --epoch 40 --epochs 320
+  python train.py --model lstm --tokenizer remi
+  python train.py --all-tokenizers
+  python train.py --model lstm --tokenizer raw --epoch 40
 """,
     )
     p.add_argument(
-        "--epoch",
-        "-e",
-        type=int,
-        metavar="N",
-        help="Resume: load latest weights from checkpoints/epoch-N/ and continue numbering",
+        "--model",
+        "-m",
+        choices=MODEL_NAMES,
+        default=default_model(),
+        help="Architecture (default: lstm, or NOTELM_MODEL)",
     )
     p.add_argument(
-        "--weights",
-        "-w",
-        metavar="PATH",
-        help="Initial weights: .pt path, or epoch-N / N (same as --epoch N)",
+        "--tokenizer",
+        "-t",
+        choices=TOKENIZER_NAMES,
+        help="Input representation (default: event)",
     )
     p.add_argument(
-        "--start-epoch",
-        type=int,
-        metavar="N",
-        help="0-based epoch index to resume from (default: same as completed epoch folder N)",
+        "--all-tokenizers",
+        action="store_true",
+        help=f"Train each tokenizer for this model: {', '.join(TRAIN_TOKENIZERS)}",
     )
     p.add_argument(
-        "--epochs",
-        type=int,
-        default=320,
-        help="Stop after this many epochs total (default: 320)",
+        "--only",
+        metavar="NAMES",
+        help="With --all-tokenizers, comma-separated subset",
     )
+    p.add_argument("--epoch", "-e", type=int, metavar="N", help="Resume from epoch-N")
+    p.add_argument("--weights", "-w", metavar="PATH", help="Initial .pt weights")
+    p.add_argument("--start-epoch", type=int, metavar="N", help="0-based resume index")
+    p.add_argument("--epochs", type=int, default=320, help="Total epochs (default: 320)")
     args = p.parse_args()
+
     if args.epoch is not None and args.weights:
         p.error("use --epoch or --weights, not both")
     if args.epoch is not None:
         args.weights = str(args.epoch)
+    if args.all_tokenizers and args.tokenizer:
+        p.error("use --tokenizer or --all-tokenizers, not both")
+    if args.only and not args.all_tokenizers:
+        p.error("--only requires --all-tokenizers")
+
     return args
+
+
+def _tokenizer_list(args) -> list[str]:
+    if args.all_tokenizers:
+        if args.only:
+            names = [s.strip().lower() for s in args.only.split(",") if s.strip()]
+            bad = [n for n in names if n not in TOKENIZER_NAMES]
+            if bad:
+                raise SystemExit(f"Unknown tokenizer(s): {bad}")
+            return names
+        return list(TRAIN_TOKENIZERS)
+    return [args.tokenizer or "event"]
+
+
+def _build_model(model_name: str, train_dataset, val_dataset, tokenizer, device, pad_id, train_cfg, ckpt_root):
+    model_name = normalize_model(model_name)
+    if model_name == "lstm":
+        return LSTM(
+            train_dataset,
+            val_dataset,
+            tokenizer.vocab_size,
+            device,
+            pad_id,
+            batch_size=train_cfg["batch_size"],
+            accum_steps=train_cfg["accum_steps"],
+            num_workers=train_cfg["num_workers"],
+            checkpoint_dir=str(ckpt_root),
+        )
+    raise NotImplementedError(
+        f"Model {model_name!r} is not implemented yet. "
+        f"Checkpoints would live under checkpoints/{model_name}/{{tokenizer}}/"
+    )
+
+
+def train_one(
+    model_name: str,
+    tokenizer_name: str,
+    *,
+    device: str,
+    train_cfg: dict,
+    epochs: int,
+    weights_spec: str | None,
+    start_epoch_override: int | None,
+) -> None:
+    model_name = normalize_model(model_name)
+    out_weights, ckpt_root = _paths_for_run(model_name, tokenizer_name)
+    train_dataset, val_dataset, tokenizer = load_datasets(tokenizer_name)
+    pad_id = tokenizer.token_to_id["PAD"]
+
+    start_epoch = 0
+    init_weights: Path | None = None
+    if weights_spec:
+        init_weights = resolve_init_weights(weights_spec, model_name, tokenizer_name)
+        start_epoch = (
+            start_epoch_override
+            if start_epoch_override is not None
+            else _infer_start_epoch(init_weights)
+        )
+        if start_epoch is None:
+            start_epoch = 0
+            print(f"[{model_name}/{tokenizer_name}] Loaded {init_weights} (start_epoch=0)")
+        else:
+            print(
+                f"[{model_name}/{tokenizer_name}] Resume epoch {start_epoch + 1} "
+                f"from {init_weights}"
+            )
+
+    if epochs <= start_epoch:
+        raise SystemExit(
+            f"[{model_name}/{tokenizer_name}] --epochs {epochs} must be > start {start_epoch}"
+        )
+
+    print(f"\n{'=' * 60}")
+    print(f"Training  model={model_name}  tokenizer={tokenizer_name}")
+    print(f"Checkpoints -> {ckpt_root.resolve()}/")
+    print(f"{'=' * 60}")
+
+    model = _build_model(
+        model_name, train_dataset, val_dataset, tokenizer, device, pad_id, train_cfg, ckpt_root
+    ).to(device)
+
+    if init_weights is not None:
+        state = torch.load(init_weights, map_location=device, weights_only=True)
+        model.load_state_dict(state)
+
+    model.fit(epochs=epochs, start_epoch=start_epoch)
+    torch.save(model.state_dict(), out_weights)
+    print(f"[{model_name}/{tokenizer_name}] saved {out_weights.resolve()}")
 
 
 def main():
     args = parse_args()
+    model_name = normalize_model(args.model)
+    names = _tokenizer_list(args)
 
     device = (
         "cuda" if torch.cuda.is_available()
@@ -136,74 +250,40 @@ def main():
 
     if device == "cuda":
         props = torch.cuda.get_device_properties(0)
-        vram_gb = props.total_memory / (1024**3)
-        print(f"Using device: {device} ({props.name}, {vram_gb:.0f} GB)")
+        print(f"Using device: cuda ({props.name}, {props.total_memory / 1024**3:.0f} GB)")
     else:
         print("Using device:", device)
 
     print(
-        f"Training config: batch_size={train_cfg['batch_size']}, "
-        f"accum_steps={train_cfg['accum_steps']} "
-        f"(effective {train_cfg['batch_size'] * train_cfg['accum_steps']}), "
-        f"num_workers={train_cfg['num_workers']}"
+        f"Model: {model_name} | tokenizers: {', '.join(names)} | "
+        f"batch={train_cfg['batch_size']} accum={train_cfg['accum_steps']}"
     )
 
-    start_epoch = 0
-    init_weights: Path | None = None
-    if args.weights:
-        init_weights = resolve_init_weights(args.weights)
-        start_epoch = (
-            args.start_epoch
-            if args.start_epoch is not None
-            else _infer_start_epoch(init_weights)
-        )
-        if start_epoch is None:
-            start_epoch = 0
-            print(
-                f"Loaded weights from {init_weights} (could not infer epoch; "
-                f"pass --start-epoch N to set checkpoint numbering)"
-            )
-        else:
-            print(
-                f"Resume from epoch {start_epoch + 1} using weights: {init_weights}"
-            )
-    elif args.start_epoch is not None:
-        raise SystemExit("--start-epoch requires --weights")
-
-    if args.epochs <= start_epoch:
-        raise SystemExit(
-            f"--epochs {args.epochs} must be greater than start epoch index {start_epoch}"
-        )
-
-    train_dataset, val_dataset = load_datasets()
-
     start = time.time()
+    weights_arg = args.weights if len(names) == 1 else None
+    if args.weights and len(names) > 1:
+        print("Note: --weights/--epoch only applied when training a single tokenizer.")
+
     try:
-        model = LSTM(
-            train_dataset,
-            val_dataset,
-            tokenizer.vocab_size,
-            device,
-            PAD_ID,
-            batch_size=train_cfg["batch_size"],
-            accum_steps=train_cfg["accum_steps"],
-            num_workers=train_cfg["num_workers"],
-        ).to(device)
-
-        if init_weights is not None:
-            state = torch.load(init_weights, map_location=device, weights_only=True)
-            model.load_state_dict(state)
-
-        model.fit(epochs=args.epochs, start_epoch=start_epoch)
-
-        torch.save(model.state_dict(), WEIGHTS_PATH)
+        for i, tok in enumerate(names):
+            if i > 0 and device == "cuda":
+                torch.cuda.empty_cache()
+            train_one(
+                model_name,
+                tok,
+                device=device,
+                train_cfg=train_cfg,
+                epochs=args.epochs,
+                weights_spec=weights_arg,
+                start_epoch_override=args.start_epoch,
+            )
 
         notify_training_complete(
             success=True,
             epochs=args.epochs,
             device=device,
             elapsed_s=time.time() - start,
-            weights_path=WEIGHTS_PATH,
+            weights_path=f"checkpoints/{model_name}/{{tokenizer}}/weights.pt",
         )
     except Exception as exc:
         notify_training_complete(

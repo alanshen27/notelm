@@ -8,7 +8,15 @@ import torch
 import torch.nn.functional as F
 
 from models.lstm import MidiLSTM
-from utils.midi_fmt import MidiTokenizer
+from utils.checkpoints import (
+    default_model,
+    infer_model_from_path,
+    infer_tokenizer_from_path,
+    legacy_tokenizer_dir,
+    legacy_weights_path,
+    weights_path,
+)
+from utils.tokenizers import BaseMidiTokenizer, get_tokenizer
 
 SRC = Path(__file__).resolve().parent
 PROJECT = SRC.parent
@@ -49,7 +57,12 @@ def _search_roots() -> list[Path]:
 def list_checkpoints() -> list[str]:
     """Find all .pt checkpoints under common project locations."""
     found: dict[str, Path] = {}
-    patterns = ("weights.pt", "checkpoints/**/*.pt")
+    patterns = (
+        "weights.pt",
+        "weights-*.pt",
+        "checkpoints/*/weights.pt",
+        "checkpoints/**/*.pt",
+    )
 
     for root in _search_roots():
         if not root.exists():
@@ -61,6 +74,30 @@ def list_checkpoints() -> list[str]:
 
     ordered = sorted(found.values(), key=lambda p: p.stat().st_mtime, reverse=True)
     return [str(p) for p in ordered]
+
+
+def default_checkpoint_for_tokenizer(
+    tokenizer_name: str | None = None,
+    model_name: str | None = None,
+) -> str | None:
+    """Latest weights for model + tokenizer (env: NOTELM_MODEL, NOTELM_TOKENIZER)."""
+    tok = (tokenizer_name or os.environ.get("NOTELM_TOKENIZER", "event")).strip().lower()
+    model = (model_name or default_model()).strip().lower()
+    for root in _search_roots():
+        for candidate in (
+            root / weights_path(model, tok),
+            root / legacy_tokenizer_dir(tok) / "weights.pt",
+            root / legacy_weights_path(tok),
+            root / "weights.pt",
+        ):
+            if candidate.is_file():
+                return str(candidate.resolve())
+    ckpts = list_checkpoints()
+    for p in ckpts:
+        path = Path(p)
+        if infer_tokenizer_from_path(path) == tok and infer_model_from_path(path) == model:
+            return p
+    return ckpts[0] if ckpts else None
 
 
 def resolve_checkpoint(checkpoint: str) -> Path:
@@ -93,12 +130,22 @@ def resolve_checkpoint(checkpoint: str) -> Path:
     )
 
 
-def load_model(checkpoint: str, device: torch.device | None = None) -> tuple[MidiLSTM, MidiTokenizer]:
+def load_model(
+    checkpoint: str,
+    device: torch.device | None = None,
+    tokenizer: BaseMidiTokenizer | None = None,
+) -> tuple[MidiLSTM, BaseMidiTokenizer]:
     device = device or get_device()
-    tokenizer = MidiTokenizer()
-    model = MidiLSTM(tokenizer.vocab_size)
-
     ckpt_path = resolve_checkpoint(checkpoint)
+    model_name = infer_model_from_path(ckpt_path)
+    if model_name != "lstm":
+        raise NotImplementedError(
+            f"Checkpoint is for model {model_name!r}; only lstm inference is implemented."
+        )
+    if tokenizer is None:
+        tok_name = infer_tokenizer_from_path(ckpt_path)
+        tokenizer = get_tokenizer(tok_name)
+    model = MidiLSTM(tokenizer.vocab_size)
     state = torch.load(ckpt_path, map_location=device, weights_only=True)
     model.load_state_dict(state)
     model.to(device)
@@ -120,7 +167,7 @@ def _sample(logits: torch.Tensor, temperature: float, top_k: int) -> int:
 @torch.no_grad()
 def generate_tokens(
     model: MidiLSTM,
-    tokenizer: MidiTokenizer,
+    tokenizer: BaseMidiTokenizer,
     *,
     max_new_tokens: int = 512,
     temperature: float = 1.0,
