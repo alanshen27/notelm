@@ -1,180 +1,135 @@
 # notelm
 
-Autoregressive MIDI generation with an LSTM over a discrete event vocabulary. MIDI files are tokenized into note-on/off, velocity, and time-shift events, then modeled as next-token prediction.
+A pop co-writer with its own synthesizer. Sketch a chord progression or melody
+on a piano roll; a Transformer trained on pop piano arrangements continues it;
+everything plays through a polyphonic subtractive synth written from scratch as
+a Web Audio AudioWorklet — and bounces to WAV through the same DSP.
 
-## Approach
+```
+sketch (piano roll) ──► FastAPI /api/continue ──► Transformer (POP909)
+        ▲                                              │
+        └── accept / edit / continue again ◄── MIDI continuation
+                              │
+                    custom AudioWorklet synth ──► playback + WAV export
+```
 
-Given a sequence of MIDI events \(x_{1:T}\), we train a language model to minimize cross-entropy on next-token targets:
+## Quickstart
+
+```bash
+./scripts/setup.sh --fetch-pop909 --lab   # uv + Python 3.13 + deps + data + UI
+./scripts/run_lab.sh                      # build UI, serve on :8000
+```
+
+Open http://localhost:8000 — the **Co-writer** tab is the instrument, the
+**Research lab** tab is the original sampling/analysis UI.
+
+## The co-writer
+
+- Click notes onto the grid (or stamp a progression: I–V–vi–IV etc.).
+- **Continue with AI** primes the model on your notes and returns a
+  continuation (amber). **Accept into sketch** merges it and lets you iterate.
+- The synthesizer panel is a real subtractive synth, hand-written DSP running
+  in an AudioWorklet: 2 polyBLEP oscillators, TPT state-variable lowpass with
+  envelope + LFO modulation, ADSR amp envelope, ping-pong delay, Schroeder
+  reverb, soft-clip master. Presets: Neon Keys, Soft Pad, Pluck, Warm Bass.
+- **Export WAV** renders the sketch offline through the same signal chain
+  (`ui/src/synth/worklet.js` is the whole sound engine).
+
+## Model
+
+Given MIDI event tokens \(x_{1:T}\), train next-token prediction:
 
 \[
 \mathcal{L} = -\sum_{t=1}^{T-1} \log p_\theta(x_{t+1} \mid x_{\leq t})
 \]
 
-Training uses teacher forcing on sliding windows extracted from [MAESTRO v3.0.0](https://magenta.tensorflow.org/datasets/maestro).
-
-## Tokenization
-
-Global grid: **`TIMESTEP_MS = 20`** in `src/utils/midi_timing.py` (all formats quantize to this step).
-
-Choose tokenizer via env or `utils/data.py`:
-
-```bash
-export NOTELM_TOKENIZER=event   # default — NOTE_ON/OFF + TIME_SHIFT
-export NOTELM_TOKENIZER=raw     # DELTA + MSG_NOTE_ON/OFF + PITCH + VEL
-export NOTELM_TOKENIZER=remi    # Bar + Position + Pitch + Velocity + Duration
-export NOTELM_TOKENIZER=piano_roll  # per-timestep TS_STEP + active PITCH/VEL
-```
-
-| Name | Description |
+| Architecture | Spec |
 |---|---|
-| `event` | `NOTE_ON_{pitch}` / `NOTE_OFF_{pitch}`, `VELOCITY_{bin}`, `TIME_SHIFT_{steps}` |
-| `raw` | Chronological raw messages with `DELTA_{steps}` |
-| `remi` | REMI-style: `Bar_*`, `Position_*`, `Pitch_*`, `Velocity_*`, `Duration_*` (no note-off) |
-| `piano_roll` | Per timestep: `TS_STEP` then `PITCH_*` / `VEL_*`; also `encode_piano_roll()` → `(T, 88)` matrix |
+| `transformer` (default for co-writing) | decoder-only, 6 layers, d_model 512, 8 heads, pre-norm, weight-tied head, ~19M params, AdamW 3e-4, bf16 autocast on CUDA |
+| `lstm` (baseline) | 1 layer, hidden 512, Adam 1e-3 |
 
-**Note:** Checkpoints are tied to the tokenizer used in training — switch tokenizer only with a new training run.
+Checkpoints: `checkpoints/{model}/{tokenizer}/epoch-N/` + final `weights.pt`.
+Transformer checkpoints are plain state dicts; architecture is re-inferred
+from tensor shapes on load.
 
-Default sequence length: **4096** tokens. Windows use stride **2048** (half overlap). Train/val split is by MIDI file, not by window.
+## Data
 
-## Model
+| Dataset | Flag | Contents |
+|---|---|---|
+| `pop909` (default) | `--fetch-pop909` (~23 MB) | 909 pop piano arrangements (melody/bridge/piano merged; alternate versions excluded from the split) |
+| `maestro` | `--fetch-maestro` (~120 MB) | MAESTRO v3, 2004 subset (legacy default) |
+| `maestro_full` | `--fetch-maestro` | all MAESTRO years — used for pretraining |
 
-| Component | Spec |
-|---|---|
-| Embedding | `vocab_size → 128` |
-| LSTM | 1 layer, hidden 512, `batch_first=True` |
-| Head | Linear → `vocab_size` |
-| Optimizer | Adam, lr = 1e-3 |
-| Loss | Cross-entropy (token-level) |
-
-Checkpoints are saved per **model** and **tokenizer**: `checkpoints/{model}/{tokenizer}/epoch-{n}/`.
-
-## Setup
-
-One-shot bootstrap (installs [uv](https://docs.astral.sh/uv/), Python 3.13, deps, training dirs):
-
-```bash
-./scripts/setup.sh --fetch-maestro
-```
-
-**Linux GPU server** (tmux, curl, unzip, CUDA PyTorch, MAESTRO):
-
-```bash
-./scripts/setup_linux.sh
-# same as:
-./scripts/setup.sh --system --fetch-maestro --cuda
-```
-
-`--system` uses apt/dnf/apk to install **tmux**, **curl**, **unzip** (needs sudo on most hosts; works as root in Docker).
-
-On an NVIDIA GPU machine (Linux), use CUDA 12.4 PyTorch wheels — **required** for CUDA 12.x drivers. Plain PyPI `torch` on Linux targets CUDA 13 and will fall back to CPU:
-
-```bash
-./scripts/setup.sh --fetch-maestro --cuda
-```
-
-If you already installed and see a CUDA driver warning, run:
-
-```bash
-./scripts/fix_cuda_torch.sh
-```
-
-Other flags: `--lab` (music21 + npm UI deps), `--cpu` (skip CUDA wheels). Run `./scripts/setup.sh --help` for details.
-
-MAESTRO can also be placed manually under `data/maestro-v3.0.0/` (gitignored). Training reads from `data/maestro-v3.0.0/2004/` by default (edit `DATA_DIR` in `src/utils/data.py` to change).
+Global grid `TIMESTEP_MS = 20`. Tokenizers: `event` (default), `raw`, `remi`
+(bars/positions — steadiest rhythm), `piano_roll`. Sequence window 4096
+tokens, stride 2048, split by file.
 
 ## Training
 
 ```bash
-cd src && python train.py                    # event (default)
-python train.py --tokenizer remi             # one format
-python train.py --all-tokenizers             # event, raw, remi, piano_roll
-python train.py --all-tokenizers --only raw,remi,piano_roll
-./scripts/train_all_tokenizers.sh
+cd src && python train.py --model transformer --dataset pop909 --tokenizer event
+python train.py --model transformer --dataset maestro_full --epochs 20   # pretrain
+python train.py --model transformer --dataset pop909 --epochs 60 \
+  --lr 1e-4 --weights <pretrain.pt> --start-epoch 0                      # fine-tune
+python train.py --all-tokenizers                                        # comparisons
 ```
 
-Each model + input format gets its own tree (no collisions between LSTM and transformer):
+Useful flags: `--seq-len N`, `--limit-files N` (smoke tests), `--lr`,
+`--epoch N` (resume). Long runs: `./scripts/train_tmux.sh <args>`.
 
-```
-checkpoints/
-  lstm/
-    event/epoch-1/...  weights.pt
-    raw/
-    remi/
-    piano_roll/
-  transformer/         # reserved for future training
-    event/
-    ...
-```
+### Cloud training (RunPod)
 
-Legacy: `checkpoints/epoch-N/`, `checkpoints/event/`, `weights-event.pt` still load (assumed LSTM + event).
+One command per lifecycle step, or fully automatic — provisions a 1x RTX A5000
+(24 GB, secure cloud), syncs the repo, sets up, trains in tmux, monitors with
+a hard budget guard, downloads checkpoints, and terminates the pod:
 
 ```bash
-cd src && python train.py --model lstm --tokenizer remi
-python train.py --model lstm --all-tokenizers
+export RUNPOD_API_KEY=...        # or put it in .env
+python3 scripts/runpod_train.py check                      # read-only: key, balance, pods
+python3 scripts/runpod_train.py full --recipe pretrain-finetune --budget 25
+python3 scripts/runpod_train.py status | logs | terminate  # manual control
 ```
 
-Resume: `python train.py --model lstm --tokenizer remi --epoch 40`
+The `pretrain-finetune` recipe runs: MAESTRO-full pretrain (20 epochs) →
+POP909 fine-tune (event) → POP909 REMI. Expected cost ~$4 at $0.27/hr.
 
-Long runs (detachable session + log file):
+## Inference & API
 
-```bash
-brew install tmux   # once
-./scripts/train_tmux.sh
-tmux attach -t notelm-train
-```
+- `POST /api/continue` — JSON `{notes: [{pitch, start, duration, velocity}]}`
+  → continuation notes + MIDI. Powers the co-writer.
+- `POST /api/generate` — free-form sampling (checkpoint, temperature, top-k,
+  optional seed MIDI upload). Powers the research lab.
+- Every run is logged to `outputs/<run_id>/` (MIDI + full token list + params).
 
-Final weights are written to `src/weights.pt`.
+Dev mode: `cd src && uvicorn api:app --reload --port 8000` and
+`cd ui && npm run dev` (proxy on :5173).
 
-## Inference lab (React)
+## Portfolio
 
-Research-oriented UI: sampling controls, token statistics, in-browser MIDI playback, run logs.
-
-```bash
-./scripts/run_lab.sh
-# open http://localhost:8000
-```
-
-Dev mode (hot reload UI):
-
-```bash
-# terminal 1
-cd src && uvicorn api:app --reload --port 8000
-
-# terminal 2
-cd ui && npm install && npm run dev
-# open http://localhost:5173
-```
-
-Each run saves `outputs/<run_id>/generated.midi` and `run.json` (full token list + params).
-
-**Sheet music:** §4 Notation renders the first 32 measures via MusicXML (requires `uv pip install music21`). Automatic MIDI→score transcription; fine for inspection, not publication quality.
-
-Legacy Gradio UI: `cd src && python app.py` (port 7860).
-
-## Email notification
-
-Copy `.env.example` to `.env` and fill in your SMTP credentials. Training sends an email on success or failure.
-
-```bash
-cp .env.example .env
-# Gmail: use an app password (Google Account → Security → App passwords)
-```
-
-Required vars: `NOTIFY_EMAIL`, `SMTP_PASS`. Optional: `SMTP_HOST` (default `smtp.gmail.com`), `SMTP_PORT` (default `587`), `SMTP_USER` (defaults to `NOTIFY_EMAIL`).
+`portfolio/` contains the Stanford Arts Portfolio materials: project
+description, demo video script, and a music résumé template.
 
 ## Layout
 
 ```
 src/
-  train.py          # entry point
-  api.py            # FastAPI inference lab backend
-  app.py            # legacy Gradio UI
-  inference.py      # load checkpoint + generate
-  models/lstm.py    # LSTM + training loop
-  utils/
-    midi_fmt.py     # tokenizer + dataset
-    data.py         # train/val split
+  train.py                 # training CLI (models × tokenizers × datasets)
+  api.py                   # FastAPI: /api/continue + research lab
+  inference.py             # checkpoint loading + generation (lstm + transformer)
+  models/{lstm,transformer}.py
+  utils/data.py            # dataset registry + windowing
+  utils/tokenizers/        # event, raw, remi, piano_roll
+ui/src/
+  CoWriter.jsx             # piano roll + co-writing flow
+  synth/worklet.js         # the synthesizer (hand-written DSP)
+  synth/engine.js          # worklet host + offline WAV render
 scripts/
-  setup.sh          # uv + deps + optional MAESTRO/CUDA
-  train_tmux.sh     # background training
+  setup.sh                 # bootstrap (+ --fetch-pop909 / --fetch-maestro / --cuda)
+  runpod_train.py          # cloud GPU lifecycle with budget guard
 ```
+
+## Email notification
+
+`cp .env.example .env` and fill in SMTP credentials (`NOTIFY_EMAIL`,
+`SMTP_PASS`; optional `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`). Training emails on
+completion or failure.

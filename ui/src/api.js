@@ -12,6 +12,19 @@ export async function fetchCheckpoints() {
   return r.json();
 }
 
+export async function continueNotes(payload) {
+  const r = await fetch(`${API}/api/continue`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({ detail: r.statusText }));
+    throw new Error(err.detail || r.statusText);
+  }
+  return r.json();
+}
+
 export async function generate(form) {
   const body = new FormData();
   body.append("checkpoint", form.checkpoint);

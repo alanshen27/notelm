@@ -8,13 +8,16 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pretty_midi
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 from inference import (
     _search_roots,
+    default_checkpoint_for_tokenizer,
     generate_tokens,
     get_device,
     list_checkpoints,
@@ -176,6 +179,108 @@ async def generate(
     with open(run_dir / "run.json", "w") as f:
         json.dump({**meta, "tokens": tokens}, f, indent=2)
 
+    return meta
+
+
+class NoteIn(BaseModel):
+    pitch: int = Field(ge=0, le=127)
+    start: float = Field(ge=0)
+    duration: float = Field(gt=0)
+    velocity: int = Field(default=100, ge=1, le=127)
+
+
+class ContinueRequest(BaseModel):
+    notes: list[NoteIn] = Field(min_length=1)
+    checkpoint: str | None = None
+    max_new_tokens: int = Field(default=512, ge=16, le=4096)
+    temperature: float = Field(default=1.0, gt=0, le=3)
+    top_k: int = Field(default=40, ge=0, le=300)
+    context_len: int = Field(default=1024, ge=32, le=4096)
+
+
+def _notes_to_midi(notes: list[NoteIn], path: Path) -> float:
+    """Write user notes as a MIDI file; returns the seed end time in seconds."""
+    midi = pretty_midi.PrettyMIDI()
+    inst = pretty_midi.Instrument(program=0)
+    for n in notes:
+        inst.notes.append(
+            pretty_midi.Note(
+                velocity=n.velocity, pitch=n.pitch, start=n.start, end=n.start + n.duration
+            )
+        )
+    midi.instruments.append(inst)
+    midi.write(str(path))
+    return max(n.start + n.duration for n in notes)
+
+
+def _default_cowriter_checkpoint() -> str | None:
+    for model in ("transformer", "lstm"):
+        ckpt = default_checkpoint_for_tokenizer("event", model)
+        if ckpt:
+            return ckpt
+    return None
+
+
+@app.post("/api/continue")
+def continue_notes(req: ContinueRequest):
+    """Co-writer: continue a user-entered melody/chord fragment."""
+    ckpt_spec = req.checkpoint or _default_cowriter_checkpoint()
+    if not ckpt_spec:
+        raise HTTPException(status_code=404, detail="No trained checkpoint found.")
+    try:
+        (nn, tokenizer), ckpt_path = _get_model(ckpt_spec)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    run_id = str(uuid.uuid4())[:8]
+    run_dir = OUTPUTS / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    seed_path = run_dir / "seed.midi"
+    seed_end = _notes_to_midi(req.notes, seed_path)
+
+    tokens = generate_tokens(
+        nn,
+        tokenizer,
+        max_new_tokens=req.max_new_tokens,
+        temperature=req.temperature,
+        top_k=req.top_k,
+        seed_midi=str(seed_path),
+        context_len=req.context_len,
+        device=get_device(),
+    )
+
+    midi_path = run_dir / "generated.midi"
+    tokenizer.tokens_to_midi(tokens, midi_path)
+
+    # Split the decoded timeline into seed vs. continuation (20 ms grid → 10 ms slack).
+    full = pretty_midi.PrettyMIDI(str(midi_path))
+    generated = [
+        {
+            "pitch": int(note.pitch),
+            "start": float(round(note.start, 4)),
+            "duration": float(round(note.end - note.start, 4)),
+            "velocity": int(note.velocity),
+        }
+        for inst in full.instruments
+        for note in inst.notes
+        if note.start >= seed_end - 0.010
+    ]
+    generated.sort(key=lambda n: (n["start"], n["pitch"]))
+
+    meta = {
+        "run_id": run_id,
+        "created": datetime.now(timezone.utc).isoformat(),
+        "model": infer_model_from_path(Path(ckpt_path)),
+        "tokenizer": tokenizer.name,
+        "checkpoint": ckpt_path,
+        "seed_end": round(seed_end, 4),
+        "notes": generated,
+        "midi_url": f"/api/runs/{run_id}/generated.midi",
+        "stats": _token_stats(tokenizer, tokens),
+    }
+    with open(run_dir / "run.json", "w") as f:
+        json.dump({**meta, "tokens": tokens}, f, indent=2)
     return meta
 
 

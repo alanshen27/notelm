@@ -42,10 +42,15 @@ def send_email(subject: str, body: str) -> bool:
     msg["To"] = to
     msg.set_content(body)
 
-    with smtplib.SMTP(host, port, timeout=30) as smtp:
-        smtp.starttls()
-        smtp.login(user, password)
-        smtp.send_message(msg)
+    # Never let a notification failure mask the training result / exit code.
+    try:
+        with smtplib.SMTP(host, port, timeout=30) as smtp:
+            smtp.starttls()
+            smtp.login(user, password)
+            smtp.send_message(msg)
+    except Exception as exc:
+        print(f"Email notification failed ({type(exc).__name__}: {exc}) — continuing")
+        return False
 
     print(f"Notification sent to {to}")
     return True

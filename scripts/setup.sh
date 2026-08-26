@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 FETCH_MAESTRO=false
+FETCH_POP909=false
 INSTALL_LAB=false
 INSTALL_SYSTEM=false
 CPU_ONLY=false
@@ -14,6 +15,9 @@ FORCE_CUDA=false
 MAESTRO_URL="https://storage.googleapis.com/magentadata/datasets/maestro/v3.0.0/maestro-v3.0.0-midi.zip"
 MAESTRO_ZIP="$ROOT/data/maestro-v3.0.0-midi.zip"
 MAESTRO_DIR="$ROOT/data/maestro-v3.0.0"
+POP909_URL="https://raw.githubusercontent.com/music-x-lab/POP909-Dataset/master/POP909.zip"
+POP909_ZIP="$ROOT/data/POP909.zip"
+POP909_DIR="$ROOT/data/POP909"
 PYTHON_VERSION="3.13"
 TORCH_CUDA_INDEX="https://download.pytorch.org/whl/cu124"
 
@@ -28,12 +32,13 @@ Options:
   --cuda          Install PyTorch with CUDA 12.4 wheels (use on NVIDIA GPUs)
   --cpu           Keep CPU/MPS PyTorch from PyPI (no CUDA wheel reinstall)
   --fetch-maestro Download MAESTRO v3.0.0 MIDI (~120 MB) into data/
+  --fetch-pop909  Download POP909 pop-song MIDI (~23 MB) into data/
   --system        Install OS packages (Linux: tmux, curl, unzip via apt/dnf/apk)
   --lab           Also install music21 + npm UI deps
   -h, --help      Show this help
 
 Linux GPU server (typical):
-  ./scripts/setup.sh --system --fetch-maestro --cuda
+  ./scripts/setup.sh --system --fetch-pop909 --cuda
 
 After setup:
   source .venv/bin/activate
@@ -113,12 +118,39 @@ sync_deps() {
   fi
 }
 
+pick_torch_cuda_index() {
+  # Blackwell (sm_120, RTX 50 / RTX PRO) needs PyTorch built with CUDA 12.8+.
+  if have nvidia-smi; then
+    local name cap major
+    name=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || true)
+    if echo "$name" | grep -qiE 'blackwell|rtx pro 4|rtx 50|5080|5090|5070|5050'; then
+      echo "https://download.pytorch.org/whl/cu128"
+      return
+    fi
+    cap=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ' || true)
+    major="${cap%%.*}"
+    if [[ -n "$major" && "$major" -ge 12 ]]; then
+      echo "https://download.pytorch.org/whl/cu128"
+      return
+    fi
+  fi
+  echo "https://download.pytorch.org/whl/cu124"
+}
+
 install_cuda_torch() {
   configure_uv
-  log "Installing PyTorch CUDA 12.4 wheels (matches CUDA 12.x drivers)..."
-  # Drop PyPI CUDA-13 torch + nvidia-* stack if a plain uv sync installed them.
+  TORCH_CUDA_INDEX="$(pick_torch_cuda_index)"
+  log "Installing PyTorch from ${TORCH_CUDA_INDEX} (auto-selected for this GPU)..."
   uv pip uninstall -y torch 2>/dev/null || true
-  uv pip install --reinstall "torch==2.12.0" --index-url "${TORCH_CUDA_INDEX}"
+  uv pip install --reinstall "torch>=2.7" --index-url "${TORCH_CUDA_INDEX}"
+  log "CUDA smoke test..."
+  uv run python -c "
+import torch
+print('torch', torch.__version__, 'cuda', torch.cuda.is_available())
+if torch.cuda.is_available():
+    torch.randn(2, device='cuda')
+    print('GPU:', torch.cuda.get_device_name(0), 'cap', torch.cuda.get_device_capability())
+"
 }
 
 want_cuda() {
@@ -173,7 +205,8 @@ install_system_packages() {
   log "System packages installed"
 }
 
-  if [[ -d "$MAESTRO_DIR/2004" ]] && compgen -G "$MAESTRO_DIR/2004/*.midi" >/dev/null; then
+fetch_maestro() {
+  if [[ -d "$MAESTRO_DIR" ]]; then
     log "MAESTRO already present at $MAESTRO_DIR"
     return
   fi
@@ -204,6 +237,41 @@ install_system_packages() {
     warn "MAESTRO extracted but no files in $MAESTRO_DIR/2004 — check layout."
   else
     log "MAESTRO ready under $MAESTRO_DIR"
+  fi
+}
+
+fetch_pop909() {
+  if [[ -d "$POP909_DIR" ]]; then
+    log "POP909 already present at $POP909_DIR"
+    return
+  fi
+
+  for cmd in curl unzip; do
+    if ! have "$cmd"; then
+      echo "Missing '$cmd' (needed for --fetch-pop909)." >&2
+      exit 1
+    fi
+  done
+
+  mkdir -p "$ROOT/data"
+  log "Downloading POP909 (pop-song MIDI, ~23 MB)..."
+  curl -fL --progress-bar -o "$POP909_ZIP" "$POP909_URL"
+
+  log "Extracting POP909..."
+  unzip -q -o "$POP909_ZIP" -d "$ROOT/data"
+
+  # Zip root is usually POP909/; normalize if nested differently.
+  if [[ ! -d "$POP909_DIR" ]]; then
+    nested="$(find "$ROOT/data" -maxdepth 3 -type d -name 'POP909' | head -1)"
+    if [[ -n "$nested" && "$nested" != "$POP909_DIR" ]]; then
+      mv "$nested" "$POP909_DIR"
+    fi
+  fi
+
+  if ! compgen -G "$POP909_DIR/001/001.mid" >/dev/null; then
+    warn "POP909 extracted but $POP909_DIR/001/001.mid missing — check layout."
+  else
+    log "POP909 ready under $POP909_DIR ($(find "$POP909_DIR" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ') songs)"
   fi
 }
 
@@ -247,13 +315,26 @@ sys.path.insert(0, str(Path("src").resolve()))
 
 import pretty_midi
 import torch
-from utils.data import DATA_DIR, seq_len_for
+from utils.data import DATASET_NAMES, dataset_dir, dataset_files, seq_len_for
 
 print(f"  Python:  {sys.version.split()[0]}")
 print(f"  PyTorch: {torch.__version__}")
 print(f"  CUDA:    {torch.cuda.is_available()}", end="")
 if torch.cuda.is_available():
     print(f" ({torch.cuda.get_device_name(0)})")
+    try:
+        torch.randn(2, device="cuda")
+    except RuntimeError as e:
+        if "no kernel image" in str(e):
+            print(
+                "\nERROR: GPU detected but PyTorch has no kernels for this card "
+                "(Blackwell / RTX 50 needs cu128).\n"
+                "Fix:  ./scripts/fix_cuda_torch.sh\n"
+                "  or:  uv pip install --reinstall 'torch>=2.7' "
+                "--index-url https://download.pytorch.org/whl/cu128\n"
+            )
+            sys.exit(1)
+        raise
 else:
     print()
 
@@ -269,12 +350,15 @@ if not torch.cuda.is_available() and shutil.which("nvidia-smi"):
     )
     sys.exit(1)
 
-midi_count = len(list(DATA_DIR.glob("*.midi"))) if DATA_DIR.is_dir() else 0
-print(f"  Data:    {DATA_DIR} ({midi_count} .midi files)")
+total = 0
+for name in DATASET_NAMES:
+    count = len(dataset_files(name))
+    total += count
+    print(f"  Data:    {name} -> {dataset_dir(name)} ({count} files)")
 print(f"  seq_len: {seq_len_for('event')} (event tokenizer)")
 
-if midi_count == 0:
-    print("\nNo training MIDI found. Run with --fetch-maestro or add files under data/maestro-v3.0.0/")
+if total == 0:
+    print("\nNo training MIDI found. Run with --fetch-pop909 (or --fetch-maestro).")
     sys.exit(1)
 PY
 }
@@ -284,6 +368,7 @@ while [[ $# -gt 0 ]]; do
     --cuda) FORCE_CUDA=true; shift ;;
     --cpu) CPU_ONLY=true; shift ;;
     --fetch-maestro) FETCH_MAESTRO=true; shift ;;
+    --fetch-pop909) FETCH_POP909=true; shift ;;
     --system) INSTALL_SYSTEM=true; shift ;;
     --lab) INSTALL_LAB=true; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -303,6 +388,7 @@ if ! want_cuda; then
 fi
 
 $FETCH_MAESTRO && fetch_maestro
+$FETCH_POP909 && fetch_pop909
 setup_env_file
 setup_dirs
 $INSTALL_LAB && setup_lab_ui
@@ -316,6 +402,7 @@ Setup complete.
   cd src && python train.py
 
 Optional:
+  ./scripts/setup.sh --fetch-pop909    # download POP909 (pop training data)
   ./scripts/setup.sh --fetch-maestro   # download MAESTRO if you skipped it
   ./scripts/setup.sh --cuda            # force CUDA PyTorch wheels
   ./scripts/train_tmux.sh              # detached training + log

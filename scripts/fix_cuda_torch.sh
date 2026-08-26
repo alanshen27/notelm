@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Reinstall PyTorch cu124 and remove orphaned CUDA 13 NVIDIA wheels from a bad PyPI install.
+# Reinstall PyTorch with the right CUDA wheels for this GPU (cu128 for Blackwell).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -13,49 +13,39 @@ if [[ ! -d .venv ]]; then
   exit 1
 fi
 
-# Leftovers when PyPI torch (CUDA 13) was installed before cu124 wheels.
-CUDA13_ORPHANS=(
-  cuda-bindings
-  cuda-pathfinder
-  cuda-toolkit
-  nvidia-cuda-cupti
-  nvidia-cuda-nvrtc
-  nvidia-cuda-runtime
-  nvidia-cudnn-cu13
-  nvidia-cufft
-  nvidia-cufile
-  nvidia-curand
-  nvidia-cusolver
-  nvidia-cusparse
-  nvidia-cusparselt-cu13
-  nvidia-nccl-cu13
-  nvidia-nvjitlink
-  nvidia-nvshmem-cu13
-  nvidia-nvtx
-)
+# shellcheck disable=SC1091
+source .venv/bin/activate
 
-echo "==> Reinstalling PyTorch (CUDA 12.4 index)..."
+pick_index() {
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    local name cap major
+    name=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || true)
+    if echo "$name" | grep -qiE 'blackwell|rtx pro 4|rtx 50|5080|5090|5070|5050'; then
+      echo "https://download.pytorch.org/whl/cu128"
+      return
+    fi
+    cap=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ' || true)
+    major="${cap%%.*}"
+    if [[ -n "$major" && "$major" -ge 12 ]]; then
+      echo "https://download.pytorch.org/whl/cu128"
+      return
+    fi
+  fi
+  echo "https://download.pytorch.org/whl/cu124"
+}
+
+INDEX=$(pick_index)
+echo "==> GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo unknown)"
+echo "==> Reinstalling torch>=2.7 from ${INDEX}"
 uv pip uninstall -y torch 2>/dev/null || true
-uv pip install --reinstall "torch>=2.6" --index-url "https://download.pytorch.org/whl/cu124"
+uv pip install --reinstall "torch>=2.7" --index-url "${INDEX}"
 
-echo "==> Removing orphaned CUDA 13 NVIDIA packages (if present)..."
-uv pip uninstall -y "${CUDA13_ORPHANS[@]}" 2>/dev/null || true
-
-echo "==> Removing optional torch extras not used by notelm..."
-uv pip uninstall -y torchaudio torchvision 2>/dev/null || true
-
-echo "==> Checking CUDA..."
-uv run python -c "
+echo "==> CUDA smoke test..."
+python -c "
 import torch
-ok = torch.cuda.is_available()
-print('torch', torch.__version__, '| cuda', ok, end='')
-if ok:
-    print(' |', torch.cuda.get_device_name(0))
-else:
-    print()
-    raise SystemExit(
-        'CUDA still unavailable — update the NVIDIA driver or recreate .venv with ./scripts/setup.sh --cuda'
-    )
+print('torch', torch.__version__)
+if not torch.cuda.is_available():
+    raise SystemExit('CUDA not available')
+x = torch.randn(2, device='cuda')
+print('ok on', torch.cuda.get_device_name(0), 'cap', torch.cuda.get_device_capability())
 "
-
-echo "Done. Keep only torch + *-cu12 nvidia packages in pip list."

@@ -35,9 +35,10 @@ class LSTM(MidiLSTM):
         accum_steps=1,
         num_workers=0,
         checkpoint_dir="checkpoints",
+        lr: float | None = None,
     ):
         super().__init__(vocab_size)
-        self.optimizer = optim.Adam(self.parameters(), lr=0.001)
+        self.optimizer = optim.Adam(self.parameters(), lr=lr or 0.001)
         self.device = device
         self.accum_steps = accum_steps
         self.checkpoint_dir = Path(checkpoint_dir)

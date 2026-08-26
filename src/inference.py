@@ -8,6 +8,7 @@ import torch
 import torch.nn.functional as F
 
 from models.lstm import MidiLSTM
+from models.transformer import MidiTransformer
 from utils.checkpoints import (
     default_model,
     infer_model_from_path,
@@ -134,20 +135,20 @@ def load_model(
     checkpoint: str,
     device: torch.device | None = None,
     tokenizer: BaseMidiTokenizer | None = None,
-) -> tuple[MidiLSTM, BaseMidiTokenizer]:
+) -> tuple[MidiLSTM | MidiTransformer, BaseMidiTokenizer]:
     device = device or get_device()
     ckpt_path = resolve_checkpoint(checkpoint)
     model_name = infer_model_from_path(ckpt_path)
-    if model_name != "lstm":
-        raise NotImplementedError(
-            f"Checkpoint is for model {model_name!r}; only lstm inference is implemented."
-        )
     if tokenizer is None:
         tok_name = infer_tokenizer_from_path(ckpt_path)
         tokenizer = get_tokenizer(tok_name)
-    model = MidiLSTM(tokenizer.vocab_size)
+
     state = torch.load(ckpt_path, map_location=device, weights_only=True)
-    model.load_state_dict(state)
+    if model_name == "transformer":
+        model = MidiTransformer.from_state_dict(state)
+    else:
+        model = MidiLSTM(tokenizer.vocab_size)
+        model.load_state_dict(state)
     model.to(device)
     model.eval()
     return model, tokenizer
@@ -164,32 +165,33 @@ def _sample(logits: torch.Tensor, temperature: float, top_k: int) -> int:
     return int(torch.multinomial(probs, 1).item())
 
 
-@torch.no_grad()
-def generate_tokens(
-    model: MidiLSTM,
-    tokenizer: BaseMidiTokenizer,
-    *,
-    max_new_tokens: int = 512,
-    temperature: float = 1.0,
-    top_k: int = 40,
-    seed_midi: str | None = None,
-    context_len: int = 256,
-    device: torch.device | None = None,
+def _seed_tokens(
+    tokenizer: BaseMidiTokenizer, seed_midi: str | None, context_len: int
 ) -> list[int]:
-    device = device or next(model.parameters()).device
     bos = tokenizer.token_to_id["BOS"]
     eos = tokenizer.token_to_id["EOS"]
     pad = tokenizer.token_to_id["PAD"]
+    if not seed_midi:
+        return [bos]
+    tokens = tokenizer.encode_midi(seed_midi)
+    tokens = [t for t in tokens if t not in (eos, pad)]
+    tokens = tokens[-context_len:]
+    if not tokens or tokens[0] != bos:
+        tokens = [bos] + tokens
+    return tokens
 
-    if seed_midi:
-        tokens = tokenizer.encode_midi(seed_midi)
-        tokens = [t for t in tokens if t not in (eos, pad)]
-        tokens = tokens[-context_len:]
-        if not tokens or tokens[0] != bos:
-            tokens = [bos] + tokens
-    else:
-        tokens = [bos]
 
+@torch.no_grad()
+def _generate_lstm(
+    model: MidiLSTM,
+    tokens: list[int],
+    *,
+    eos: int,
+    max_new_tokens: int,
+    temperature: float,
+    top_k: int,
+    device: torch.device,
+) -> list[int]:
     hidden = None
     out = None
 
@@ -211,6 +213,58 @@ def generate_tokens(
         out, hidden = model.lstm(emb, hidden)
 
     return tokens
+
+
+@torch.no_grad()
+def _generate_transformer(
+    model: MidiTransformer,
+    tokens: list[int],
+    *,
+    eos: int,
+    max_new_tokens: int,
+    temperature: float,
+    top_k: int,
+    device: torch.device,
+) -> list[int]:
+    for _ in range(max_new_tokens):
+        ctx = tokens[-model.max_len :]
+        x = torch.tensor([ctx], dtype=torch.long, device=device)
+        logits = model(x)[0, -1, :]
+        next_id = _sample(logits, temperature, top_k)
+
+        if next_id == eos:
+            break
+        tokens.append(next_id)
+
+    return tokens
+
+
+@torch.no_grad()
+def generate_tokens(
+    model: MidiLSTM | MidiTransformer,
+    tokenizer: BaseMidiTokenizer,
+    *,
+    max_new_tokens: int = 512,
+    temperature: float = 1.0,
+    top_k: int = 40,
+    seed_midi: str | None = None,
+    context_len: int = 256,
+    device: torch.device | None = None,
+) -> list[int]:
+    device = device or next(model.parameters()).device
+    eos = tokenizer.token_to_id["EOS"]
+    tokens = _seed_tokens(tokenizer, seed_midi, context_len)
+
+    kwargs = dict(
+        eos=eos,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        top_k=top_k,
+        device=device,
+    )
+    if isinstance(model, MidiTransformer):
+        return _generate_transformer(model, tokens, **kwargs)
+    return _generate_lstm(model, tokens, **kwargs)
 
 
 def generate_midi(

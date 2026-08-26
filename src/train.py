@@ -1,13 +1,35 @@
 import argparse
 import os
 import re
+import sys
 import time
 from pathlib import Path
+
+def _require_venv_python() -> None:
+    """Fail fast when `python` is not the project venv (common on SSH boxes)."""
+    root = Path(__file__).resolve().parents[1]
+    venv_py = root / ".venv" / "bin" / "python"
+    if venv_py.exists() and Path(sys.executable).resolve() != venv_py.resolve():
+        print(
+            f"Wrong Python: {sys.executable}\n"
+            f"Project venv: {venv_py}\n\n"
+            "Fix:\n"
+            f"  cd {root} && source .venv/bin/activate && cd src && python train.py ...\n"
+            f"  # or from repo root:\n"
+            f"  ./scripts/train.sh --all-tokenizers\n"
+            f"  uv run python src/train.py --all-tokenizers",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+
+_require_venv_python()
 
 import torch
 
 from inference import resolve_checkpoint, _search_roots
 from models.lstm import LSTM
+from models.transformer import Transformer
 from utils.checkpoints import (
     MODEL_NAMES,
     checkpoint_dir,
@@ -17,7 +39,7 @@ from utils.checkpoints import (
     normalize_model,
     weights_path as final_weights_path,
 )
-from utils.data import TRAIN_TOKENIZERS, load_datasets
+from utils.data import DATASET_NAMES, TRAIN_TOKENIZERS, load_datasets, normalize_dataset
 from utils.notify import notify_training_complete
 from utils.tokenizers import TOKENIZER_NAMES
 
@@ -35,6 +57,43 @@ def _warn_cuda_driver_mismatch() -> None:
         "\nWARNING: nvidia-smi works but PyTorch cannot use CUDA (training on CPU).\n"
         "Fix on this machine:  ./scripts/fix_cuda_torch.sh\n"
     )
+
+
+def _resolve_device(requested: str | None = None) -> str:
+    if requested == "cpu":
+        return "cpu"
+    if requested == "mps":
+        if torch.backends.mps.is_available():
+            return "mps"
+        raise SystemExit("MPS requested but not available")
+    if requested == "cuda":
+        if not torch.cuda.is_available():
+            raise SystemExit("CUDA requested but torch.cuda.is_available() is False")
+    elif not torch.cuda.is_available():
+        return "mps" if torch.backends.mps.is_available() else "cpu"
+
+    if torch.cuda.is_available() and requested in (None, "cuda"):
+        try:
+            torch.randn(2, device="cuda")
+            torch.cuda.synchronize()
+        except RuntimeError as e:
+            if "no kernel image" in str(e).lower():
+                cap = torch.cuda.get_device_capability(0)
+                name = torch.cuda.get_device_name(0)
+                raise SystemExit(
+                    f"\nCUDA kernel error on {name} (cap {cap}).\n"
+                    "Blackwell / RTX 50 / RTX PRO needs PyTorch cu128, not cu124.\n\n"
+                    "Fix:\n"
+                    "  cd /notelm && ./scripts/fix_cuda_torch.sh\n"
+                    "  # or:\n"
+                    "  uv pip install --reinstall 'torch>=2.7' "
+                    "--index-url https://download.pytorch.org/whl/cu128\n\n"
+                    "Train on CPU meanwhile:  python train.py --device cpu ...\n"
+                ) from e
+            raise
+        return "cuda"
+
+    return "mps" if torch.backends.mps.is_available() else "cpu"
 
 
 def _training_config(device: str) -> dict:
@@ -101,10 +160,18 @@ tokenizers: {", ".join(TOKENIZER_NAMES)}
 checkpoints -> checkpoints/{{model}}/{{tokenizer}}/epoch-N/
 
 examples:
+  python train.py --model transformer --dataset pop909 --tokenizer event
   python train.py --model lstm --tokenizer remi
   python train.py --all-tokenizers
   python train.py --model lstm --tokenizer raw --epoch 40
 """,
+    )
+    p.add_argument(
+        "--dataset",
+        "-d",
+        choices=DATASET_NAMES,
+        default=None,
+        help="Training corpus (default: pop909, or NOTELM_DATASET)",
     )
     p.add_argument(
         "--model",
@@ -129,10 +196,34 @@ examples:
         metavar="NAMES",
         help="With --all-tokenizers, comma-separated subset",
     )
+    p.add_argument(
+        "--device",
+        choices=("auto", "cuda", "cpu", "mps"),
+        default="auto",
+        help="Device (default: auto with CUDA kernel smoke test)",
+    )
     p.add_argument("--epoch", "-e", type=int, metavar="N", help="Resume from epoch-N")
     p.add_argument("--weights", "-w", metavar="PATH", help="Initial .pt weights")
     p.add_argument("--start-epoch", type=int, metavar="N", help="0-based resume index")
     p.add_argument("--epochs", type=int, default=320, help="Total epochs (default: 320)")
+    p.add_argument(
+        "--seq-len",
+        type=int,
+        metavar="N",
+        help="Override window length (default: per-tokenizer)",
+    )
+    p.add_argument(
+        "--limit-files",
+        type=int,
+        metavar="N",
+        help="Use only N files (smoke tests)",
+    )
+    p.add_argument(
+        "--lr",
+        type=float,
+        metavar="LR",
+        help="Learning rate override (e.g. 1e-4 for fine-tuning)",
+    )
     args = p.parse_args()
 
     if args.epoch is not None and args.weights:
@@ -159,19 +250,38 @@ def _tokenizer_list(args) -> list[str]:
     return [args.tokenizer or "event"]
 
 
-def _build_model(model_name: str, train_dataset, val_dataset, tokenizer, device, pad_id, train_cfg, ckpt_root):
+def _build_model(
+    model_name: str,
+    train_dataset,
+    val_dataset,
+    tokenizer,
+    device,
+    pad_id,
+    train_cfg,
+    ckpt_root,
+    seq_len: int,
+):
     model_name = normalize_model(model_name)
+    common = dict(
+        batch_size=train_cfg["batch_size"],
+        accum_steps=train_cfg["accum_steps"],
+        num_workers=train_cfg["num_workers"],
+        checkpoint_dir=str(ckpt_root),
+        lr=train_cfg.get("lr"),
+    )
     if model_name == "lstm":
         return LSTM(
+            train_dataset, val_dataset, tokenizer.vocab_size, device, pad_id, **common
+        )
+    if model_name == "transformer":
+        return Transformer(
             train_dataset,
             val_dataset,
             tokenizer.vocab_size,
             device,
             pad_id,
-            batch_size=train_cfg["batch_size"],
-            accum_steps=train_cfg["accum_steps"],
-            num_workers=train_cfg["num_workers"],
-            checkpoint_dir=str(ckpt_root),
+            max_len=seq_len,
+            **common,
         )
     raise NotImplementedError(
         f"Model {model_name!r} is not implemented yet. "
@@ -188,11 +298,17 @@ def train_one(
     epochs: int,
     weights_spec: str | None,
     start_epoch_override: int | None,
+    dataset: str | None = None,
+    seq_len: int | None = None,
+    limit_files: int | None = None,
 ) -> None:
     model_name = normalize_model(model_name)
     out_weights, ckpt_root = _paths_for_run(model_name, tokenizer_name)
-    train_dataset, val_dataset, tokenizer = load_datasets(tokenizer_name)
+    train_dataset, val_dataset, tokenizer = load_datasets(
+        tokenizer_name, dataset=dataset, seq_len=seq_len, limit_files=limit_files
+    )
     pad_id = tokenizer.token_to_id["PAD"]
+    effective_seq_len = train_dataset.seq_len
 
     start_epoch = 0
     init_weights: Path | None = None
@@ -223,7 +339,15 @@ def train_one(
     print(f"{'=' * 60}")
 
     model = _build_model(
-        model_name, train_dataset, val_dataset, tokenizer, device, pad_id, train_cfg, ckpt_root
+        model_name,
+        train_dataset,
+        val_dataset,
+        tokenizer,
+        device,
+        pad_id,
+        train_cfg,
+        ckpt_root,
+        effective_seq_len,
     ).to(device)
 
     if init_weights is not None:
@@ -238,15 +362,14 @@ def train_one(
 def main():
     args = parse_args()
     model_name = normalize_model(args.model)
+    dataset = normalize_dataset(args.dataset)
     names = _tokenizer_list(args)
 
-    device = (
-        "cuda" if torch.cuda.is_available()
-        else "mps" if torch.backends.mps.is_available()
-        else "cpu"
-    )
+    device = _resolve_device(None if args.device == "auto" else args.device)
     _warn_cuda_driver_mismatch()
     train_cfg = _training_config(device)
+    if args.lr:
+        train_cfg["lr"] = args.lr
 
     if device == "cuda":
         props = torch.cuda.get_device_properties(0)
@@ -255,7 +378,7 @@ def main():
         print("Using device:", device)
 
     print(
-        f"Model: {model_name} | tokenizers: {', '.join(names)} | "
+        f"Model: {model_name} | dataset: {dataset} | tokenizers: {', '.join(names)} | "
         f"batch={train_cfg['batch_size']} accum={train_cfg['accum_steps']}"
     )
 
@@ -276,6 +399,9 @@ def main():
                 epochs=args.epochs,
                 weights_spec=weights_arg,
                 start_epoch_override=args.start_epoch,
+                dataset=dataset,
+                seq_len=args.seq_len,
+                limit_files=args.limit_files,
             )
 
         notify_training_complete(
