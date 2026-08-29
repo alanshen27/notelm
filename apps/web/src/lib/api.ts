@@ -15,10 +15,39 @@ export type SynthNote = {
   velocity: number;
 };
 
+function requestUrls(path: string) {
+  const p = path.startsWith("/") ? path : `/${path}`;
+  const urls = [apiUrl(p)];
+  const baked = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/+$/, "");
+  if (baked) urls.push(`${baked}${p}`);
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    if (host !== "localhost" && host !== "127.0.0.1") {
+      urls.push(`https://notelm-api.onrender.com${p}`);
+    }
+  }
+  return [...new Set(urls.filter(Boolean))];
+}
+
 export async function fetchCheckpoints(): Promise<{ checkpoints: Checkpoint[] }> {
-  const r = await fetch(apiUrl("/api/checkpoints"));
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
+  let last = "Could not load models.";
+  const urls = [
+    ...requestUrls("/api/checkpoints"),
+    "https://notelm-api.onrender.com/api/checkpoints",
+  ];
+  for (const url of [...new Set(urls)]) {
+    try {
+      const r = await fetch(url);
+      if (!r.ok) {
+        last = r.statusText || last;
+        continue;
+      }
+      return r.json();
+    } catch (err) {
+      last = err instanceof Error ? err.message : last;
+    }
+  }
+  throw new Error(last);
 }
 
 export async function continueNotes(payload: {
@@ -65,16 +94,7 @@ function readError(err: unknown, fallback: string) {
 }
 
 function generateEndpoints() {
-  const urls = [apiUrl("/api/generate")];
-  const baked = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/+$/, "");
-  if (baked) urls.push(`${baked}/api/generate`);
-  if (typeof window !== "undefined") {
-    const host = window.location.hostname;
-    if (host !== "localhost" && host !== "127.0.0.1") {
-      urls.push("https://notelm-api.onrender.com/api/generate");
-    }
-  }
-  return [...new Set(urls.filter(Boolean))];
+  return requestUrls("/api/generate");
 }
 
 export async function generatePhrase(payload?: {

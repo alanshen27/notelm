@@ -60,7 +60,7 @@ export function ModelCards() {
           <p>{featured.blurb}</p>
           <div className="flex flex-wrap gap-2">
             <Link
-              href={routes.playground}
+              href={`${routes.playground}?model=prelude`}
               className={buttonVariants({ variant: "secondary" })}
             >
               Hear it
