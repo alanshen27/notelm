@@ -235,6 +235,80 @@ body {
   }
 }
 
+.blob-mood video {
+  transition: filter 400ms ease;
+}
+
+.blob-mood-none video {
+  filter: none;
+}
+
+.blob-mood-Q1 video {
+  filter: brightness(1.28) sepia(1) saturate(2.6) hue-rotate(12deg);
+}
+
+.blob-mood-Q2 video {
+  filter: brightness(1.12) sepia(1) saturate(3.2) hue-rotate(-22deg);
+}
+
+.blob-mood-Q3 video {
+  filter: brightness(0.82) sepia(0.85) saturate(2.4) hue-rotate(228deg);
+}
+
+.blob-mood-Q4 video {
+  filter: brightness(1.22) sepia(0.9) saturate(2.1) hue-rotate(158deg);
+}
+
+.blob-wash {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  mix-blend-mode: soft-light;
+  opacity: 0.55;
+  transition: background 400ms ease, opacity 400ms ease;
+}
+
+.blob-mood-none .blob-wash {
+  opacity: 0;
+}
+
+.blob-mood-Q1 .blob-wash {
+  background: #f0c14b;
+}
+
+.blob-mood-Q2 .blob-wash {
+  background: #d6452e;
+}
+
+.blob-mood-Q3 .blob-wash {
+  background: #3a2a78;
+}
+
+.blob-mood-Q4 .blob-wash {
+  background: #3aa8a0;
+}
+
+.blob-mood {
+  box-shadow: 0 0 0 0 transparent;
+  transition: box-shadow 400ms ease;
+}
+
+.blob-mood-Q1 {
+  box-shadow: 0 18px 50px oklch(0.78 0.14 85 / 0.35);
+}
+
+.blob-mood-Q2 {
+  box-shadow: 0 18px 50px oklch(0.62 0.2 28 / 0.32);
+}
+
+.blob-mood-Q3 {
+  box-shadow: 0 18px 50px oklch(0.4 0.14 290 / 0.38);
+}
+
+.blob-mood-Q4 {
+  box-shadow: 0 18px 50px oklch(0.7 0.1 190 / 0.32);
+}
+
 .hero-playhead {
   position: absolute;
   inset-block: 0;

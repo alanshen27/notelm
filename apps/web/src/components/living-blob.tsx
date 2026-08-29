@@ -3,7 +3,10 @@
 import { useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 
+type Mood = "none" | "Q1" | "Q2" | "Q3" | "Q4";
+
 type Props = {
+  mood?: Mood;
   busy?: boolean;
   playing?: boolean;
   getLevel?: () => number;
@@ -13,6 +16,7 @@ type Props = {
 };
 
 export function LivingBlob({
+  mood = "none",
   busy = false,
   playing = false,
   getLevel,
@@ -51,9 +55,10 @@ export function LivingBlob({
       disabled={disabled}
       aria-label={label}
       className={cn(
-        "relative size-48 overflow-hidden rounded-full sm:size-56",
+        "blob-mood relative size-48 overflow-hidden rounded-full sm:size-56",
         "outline-none focus-visible:ring-2 focus-visible:ring-foreground/25",
-        "disabled:cursor-wait"
+        "disabled:cursor-wait",
+        `blob-mood-${mood}`
       )}
     >
       <video
@@ -69,6 +74,7 @@ export function LivingBlob({
         <source src="/blob.webm" type="video/webm" />
         <source src="/blob.mp4" type="video/mp4" />
       </video>
+      <span className="blob-wash" aria-hidden />
     </button>
   );
 }

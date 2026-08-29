@@ -9,11 +9,11 @@ import { LivingBlob } from "@/components/living-blob";
 import { cn } from "@/lib/utils";
 
 const MOODS = [
-  { id: "none", label: "Any" },
-  { id: "Q1", label: "Bright" },
-  { id: "Q2", label: "Tense" },
-  { id: "Q3", label: "Dark" },
-  { id: "Q4", label: "Calm" },
+  { id: "none", label: "Any", chip: "border-foreground/40 bg-foreground text-background" },
+  { id: "Q1", label: "Bright", chip: "border-[#d4a017] bg-[#f0c14b] text-[#3d2e00]" },
+  { id: "Q2", label: "Tense", chip: "border-[#b33622] bg-[#d6452e] text-white" },
+  { id: "Q3", label: "Dark", chip: "border-[#2a1d5c] bg-[#3a2a78] text-white" },
+  { id: "Q4", label: "Calm", chip: "border-[#2b8a84] bg-[#3aa8a0] text-white" },
 ] as const;
 
 export function Playground() {
@@ -78,7 +78,7 @@ export function Playground() {
             className={cn(
               "rounded-full border px-3 py-1 text-xs font-medium tracking-wide transition-colors",
               mood === m.id
-                ? "border-foreground/40 bg-foreground text-background"
+                ? m.chip
                 : "border-border text-muted-foreground hover:border-foreground/30 hover:text-foreground"
             )}
           >
@@ -89,6 +89,7 @@ export function Playground() {
 
       <div className="mt-10">
         <LivingBlob
+          mood={mood}
           busy={busy}
           playing={playing}
           getLevel={() => engineRef.current.getLevel()}
