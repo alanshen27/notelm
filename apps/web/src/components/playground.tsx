@@ -9,12 +9,14 @@ import { LivingBlob } from "@/components/living-blob";
 import { cn } from "@/lib/utils";
 
 const MOODS = [
-  { id: "none", label: "Any", chip: "border-foreground/40 bg-foreground text-background" },
-  { id: "Q1", label: "Bright", chip: "border-[#d4a017] bg-[#f0c14b] text-[#3d2e00]" },
-  { id: "Q2", label: "Tense", chip: "border-[#b33622] bg-[#d6452e] text-white" },
-  { id: "Q3", label: "Dark", chip: "border-[#2a1d5c] bg-[#3a2a78] text-white" },
-  { id: "Q4", label: "Calm", chip: "border-[#2b8a84] bg-[#3aa8a0] text-white" },
+  { id: "none", label: "Any", swatch: "bg-neutral-800" },
+  { id: "Q1", label: "Bright", swatch: "bg-[#f0c14b]" },
+  { id: "Q2", label: "Tense", swatch: "bg-[#d6452e]" },
+  { id: "Q3", label: "Dark", swatch: "bg-[#3a2a78]" },
+  { id: "Q4", label: "Calm", swatch: "bg-[#3aa8a0]" },
 ] as const;
+
+const RING = 40;
 
 export function Playground() {
   const engineRef = useRef(new SynthEngine());
@@ -57,6 +59,8 @@ export function Playground() {
     }
   }, [mood]);
 
+  const selected = MOODS.find((m) => m.id === mood) ?? MOODS[0];
+
   return (
     <section className="mx-auto flex min-h-[70vh] max-w-[720px] flex-col items-center px-6 py-16 text-center sm:py-20">
       <p className="mb-3 text-xs font-semibold tracking-[0.18em] text-muted-foreground uppercase">
@@ -66,41 +70,81 @@ export function Playground() {
         One click. A phrase.
       </h1>
       <p className="mt-4 max-w-md text-muted-foreground">
-        No grid. No score. Tap the mark and just listen.
+        Pick a mood on the circle, then tap the mark. It writes a short line and plays it.
       </p>
 
-      <div className="mt-7 flex flex-wrap justify-center gap-2">
-        {MOODS.map((m) => (
-          <button
-            key={m.id}
-            type="button"
-            onClick={() => setMood(m.id)}
-            className={cn(
-              "rounded-full border px-3 py-1 text-xs font-medium tracking-wide transition-colors",
-              mood === m.id
-                ? m.chip
-                : "border-border text-muted-foreground hover:border-foreground/30 hover:text-foreground"
-            )}
-          >
-            {m.label}
-          </button>
-        ))}
-      </div>
-
-      <div className="mt-10">
-        <LivingBlob
-          mood={mood}
-          busy={busy}
-          playing={playing}
-          getLevel={() => engineRef.current.getLevel()}
-          disabled={busy}
-          onClick={generate}
-          label={busy ? "Generating" : "Generate a phrase"}
+      <div
+        role="radiogroup"
+        aria-label="Mood"
+        className="relative mx-auto mt-10 size-[24.5rem] sm:size-[28rem]"
+      >
+        <div
+          aria-hidden
+          className="pointer-events-none absolute left-1/2 top-1/2 size-[80%] -translate-x-1/2 -translate-y-1/2 rounded-full border border-border"
         />
+
+        {MOODS.map((m, i) => {
+          const rad = ((-90 + (i * 360) / MOODS.length) * Math.PI) / 180;
+          const active = mood === m.id;
+          return (
+            <button
+              key={m.id}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              aria-label={m.label}
+              onClick={() => setMood(m.id)}
+              className="absolute z-10 size-14 -translate-x-1/2 -translate-y-1/2 overflow-visible"
+              style={{
+                left: `${50 + RING * Math.cos(rad)}%`,
+                top: `${50 + RING * Math.sin(rad)}%`,
+              }}
+            >
+              <span
+                className={cn(
+                  "absolute left-1/2 top-1/2 size-9 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 shadow-sm transition-transform sm:size-10",
+                  m.swatch,
+                  active
+                    ? "scale-110 border-foreground"
+                    : "border-white opacity-80 hover:scale-105 hover:opacity-100"
+                )}
+              />
+              <span
+                className={cn(
+                  "pointer-events-none absolute left-1/2 top-1/2 whitespace-nowrap text-[10px] font-medium tracking-wide sm:text-xs",
+                  active ? "text-foreground" : "text-muted-foreground"
+                )}
+                style={{
+                  transform: `translate(-50%, -50%) translate(${Math.cos(rad) * 28}px, ${Math.sin(rad) * 28}px)`,
+                }}
+              >
+                {m.label}
+              </span>
+            </button>
+          );
+        })}
+
+        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
+          <LivingBlob
+            mood={mood}
+            busy={busy}
+            playing={playing}
+            getLevel={() => engineRef.current.getLevel()}
+            disabled={busy}
+            onClick={generate}
+            label={busy ? "Generating" : "Generate a phrase"}
+          />
+        </div>
       </div>
 
-      <p className="mt-2 text-sm text-muted-foreground">
-        {busy ? "Writing…" : playing ? "Playing." : heard ? "Again, whenever you want." : "Click the mark."}
+      <p className="mt-1 text-sm text-muted-foreground">
+        {busy
+          ? "Writing…"
+          : playing
+            ? `Playing · ${selected.label}`
+            : heard
+              ? `${selected.label}. Again, whenever you want.`
+              : `${selected.label}. Click the mark.`}
       </p>
 
       {error && (
