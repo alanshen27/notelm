@@ -1,5 +1,6 @@
 # Public site: Next static export + /api reverse-proxy to notelm-api.
-# Electron is optional; lightningcss's native binary is also optional — we need the latter.
+# Electron is optional. --omit=optional also drops lightningcss and
+# @tailwindcss/oxide native binaries, which Next needs on linux.
 FROM node:22-bookworm-slim AS ui
 WORKDIR /ui
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -9,9 +10,8 @@ ARG NEXT_PUBLIC_API_URL=
 ENV NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 COPY apps/web/package.json ./
-RUN npm install --omit=optional \
-    && VER="$(node -p "JSON.parse(require('fs').readFileSync('node_modules/lightningcss/package.json','utf8')).version")" \
-    && npm install --no-save --omit=optional "lightningcss-linux-x64-gnu@$VER"
+RUN npm pkg delete optionalDependencies.electron \
+    && npm install
 COPY apps/web ./
 RUN npm run build
 
