@@ -1,0 +1,24 @@
+# CPU inference API. CUDA wheels are huge and useless on Render (no GPU).
+# Site static files live in the `notelm` web service (Dockerfile).
+FROM python:3.13-slim-bookworm
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch \
+    && pip install --no-cache-dir \
+        "pretty_midi>=0.2.11" \
+        "tqdm>=4.66" \
+        "fastapi>=0.115" \
+        "uvicorn>=0.32" \
+        "python-multipart>=0.0.12"
+
+COPY src ./src
+
+WORKDIR /app/src
+EXPOSE 8000
+CMD ["sh", "-c", "exec uvicorn api:app --host 0.0.0.0 --port ${PORT:-8000}"]

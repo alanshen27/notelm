@@ -1,13 +1,18 @@
-# Inference Blueprint. Render has no GPU — train on RunPod, serve here.
+# Two Render services. Render has no GPU — train on RunPod, serve here.
 # The decoder Transformer is ~21M params (~80 MB weights). CPU is enough.
 # Free (512 MB) will OOM on PyTorch. 4c-8g is extra headroom on a paid plan.
 #
-# Dashboard: New → Blueprint → this repo. Region is fixed at first deploy.
+# Dashboard: New → Blueprint → this repo (or sync this Blueprint if notelm already exists).
+# Region is fixed at first deploy.
 # prelude.pt / etude.pt are REMI snapshots (~97 MiB, under GitHub's 100 MiB limit).
+#
+#   notelm       Next static site + /api reverse-proxy (small)
+#   notelm-api   FastAPI + PyTorch CPU inference (large)
 services:
   - type: web
-    name: notelm
+    name: notelm-api
     runtime: docker
+    dockerfilePath: ./Dockerfile.api
     plan: 4c-8g
     region: singapore
     healthCheckPath: /api/health
@@ -16,11 +21,22 @@ services:
         value: "1"
       - key: SITE_URL
         value: https://notelm.onrender.com
-      - key: NEXT_PUBLIC_SITE_URL
-        value: https://notelm.onrender.com
       - key: OMP_NUM_THREADS
         value: "4"
       - key: MKL_NUM_THREADS
         value: "4"
       - key: TORCH_NUM_THREADS
         value: "4"
+
+  - type: web
+    name: notelm
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    region: singapore
+    healthCheckPath: /
+    envVars:
+      - key: NEXT_PUBLIC_SITE_URL
+        value: https://notelm.onrender.com
+      - key: API_UPSTREAM
+        value: https://notelm-api.onrender.com

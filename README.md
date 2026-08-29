@@ -102,10 +102,21 @@ python3 scripts/runpod_train.py terminate   # you stop billing
 ## Cloud (Render)
 
 Inference only — Render has no GPU. The ~21M Transformer fits in RAM and
-runs on CPU (`render.yaml` + `Dockerfile`). Dashboard: New → Blueprint.
+runs on CPU. Dashboard: New → Blueprint (`render.yaml`), or sync the Blueprint
+if `notelm` already exists.
 
-`4c-8g` is the default plan (free 512 MB will OOM). Shipped checkpoints are
-`prelude.pt` and `etude.pt` (REMI).
+Two services:
+
+| Service | Image | Plan | What it does |
+|---|---|---|---|
+| `notelm` | `Dockerfile` | starter | Next static site; proxies `/api` to the API |
+| `notelm-api` | `Dockerfile.api` | `4c-8g` | FastAPI + PyTorch CPU. Free 512 MB will OOM. |
+
+Public URL stays https://notelm.onrender.com. The browser still calls `/api/...`
+on that host; the site container forwards those requests to
+https://notelm-api.onrender.com.
+
+Shipped checkpoints are `prelude.pt` and `etude.pt` (REMI).
 
 ## API
 
