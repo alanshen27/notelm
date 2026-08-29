@@ -1,9 +1,11 @@
 import argparse
 import os
 import re
+import shutil
 import sys
 import time
 from pathlib import Path
+
 
 def _require_venv_python() -> None:
     """Fail fast when `python` is not the project venv (common on SSH boxes)."""
@@ -15,9 +17,7 @@ def _require_venv_python() -> None:
             f"Project venv: {venv_py}\n\n"
             "Fix:\n"
             f"  cd {root} && source .venv/bin/activate && cd src && python train.py ...\n"
-            f"  # or from repo root:\n"
-            f"  ./scripts/train.sh --all-tokenizers\n"
-            f"  uv run python src/train.py --all-tokenizers",
+            f"  ./scripts/train.sh --dataset pop --epochs 40",
             file=sys.stderr,
         )
         raise SystemExit(1)
@@ -28,18 +28,20 @@ _require_venv_python()
 import torch
 
 from inference import resolve_checkpoint, _search_roots
-from models.lstm import LSTM
 from models.transformer import Transformer
+from models.canon import Canon, DEC_MAX_LEN, ENC_MAX_LEN
 from utils.checkpoints import (
+    CHECKPOINT_CODENAMES,
     MODEL_NAMES,
     checkpoint_dir,
     default_model,
     epoch_dir,
     legacy_tokenizer_dir,
+    normalize_codename,
     normalize_model,
     weights_path as final_weights_path,
 )
-from utils.data import DATASET_NAMES, TRAIN_TOKENIZERS, load_datasets, normalize_dataset
+from utils.data import DATASET_NAMES, load_datasets, load_span_datasets, normalize_dataset
 from utils.notify import notify_training_complete
 from utils.tokenizers import TOKENIZER_NAMES
 
@@ -85,10 +87,6 @@ def _resolve_device(requested: str | None = None) -> str:
                     "Blackwell / RTX 50 / RTX PRO needs PyTorch cu128, not cu124.\n\n"
                     "Fix:\n"
                     "  cd /notelm && ./scripts/fix_cuda_torch.sh\n"
-                    "  # or:\n"
-                    "  uv pip install --reinstall 'torch>=2.7' "
-                    "--index-url https://download.pytorch.org/whl/cu128\n\n"
-                    "Train on CPU meanwhile:  python train.py --device cpu ...\n"
                 ) from e
             raise
         return "cuda"
@@ -96,10 +94,29 @@ def _resolve_device(requested: str | None = None) -> str:
     return "mps" if torch.backends.mps.is_available() else "cpu"
 
 
-def _training_config(device: str) -> dict:
+def _init_distributed() -> None:
+    if "LOCAL_RANK" not in os.environ:
+        return
+    import torch.distributed as dist
+
+    local = int(os.environ["LOCAL_RANK"])
+    dist.init_process_group("nccl")
+    torch.cuda.set_device(local)
+
+
+def _training_config(device: str, model_name: str = "transformer") -> dict:
     cpus = os.cpu_count() or 1
+    canon = model_name == "canon"
     if device == "cuda":
         gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        if canon:
+            if gb >= 70:
+                return {"batch_size": 32, "accum_steps": 1, "num_workers": min(8, cpus)}
+            if gb >= 40:
+                return {"batch_size": 16, "accum_steps": 2, "num_workers": min(8, cpus)}
+            if gb >= 20:
+                return {"batch_size": 8, "accum_steps": 2, "num_workers": min(6, cpus)}
+            return {"batch_size": 4, "accum_steps": 4, "num_workers": min(4, cpus)}
         if gb >= 35:
             return {"batch_size": 64, "accum_steps": 1, "num_workers": min(8, cpus)}
         if gb >= 20:
@@ -108,7 +125,7 @@ def _training_config(device: str) -> dict:
             return {"batch_size": 16, "accum_steps": 1, "num_workers": min(4, cpus)}
         return {"batch_size": 8, "accum_steps": 2, "num_workers": min(4, cpus)}
     if device == "mps":
-        return {"batch_size": 4, "accum_steps": 4, "num_workers": 0}
+        return {"batch_size": 2 if canon else 4, "accum_steps": 4, "num_workers": 0}
     return {"batch_size": 2, "accum_steps": 8, "num_workers": min(2, cpus)}
 
 
@@ -151,19 +168,18 @@ def resolve_init_weights(spec: str, model_name: str, tokenizer_name: str) -> Pat
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Train notelm (one or all tokenizers).",
+        description="Train the notelm Transformer.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=f"""
-models:     {", ".join(MODEL_NAMES)}
 tokenizers: {", ".join(TOKENIZER_NAMES)}
-
-checkpoints -> checkpoints/{{model}}/{{tokenizer}}/epoch-N/
+datasets:   {", ".join(DATASET_NAMES)}
 
 examples:
-  python train.py --model transformer --dataset pop909 --tokenizer event
-  python train.py --model lstm --tokenizer remi
-  python train.py --all-tokenizers
-  python train.py --model lstm --tokenizer raw --epoch 40
+  python train.py --dataset pop909 --tokenizer event --epochs 40
+  python train.py --dataset pop --epochs 40 --codename etude
+  python train.py --dataset maestro_full --epochs 20
+  python train.py --model canon --dataset instruments --tokenizer remi --epochs 40
+  python train.py --model canon --dataset piano --tokenizer remi --epochs 40 --codename canon
 """,
     )
     p.add_argument(
@@ -178,23 +194,14 @@ examples:
         "-m",
         choices=MODEL_NAMES,
         default=default_model(),
-        help="Architecture (default: lstm, or NOTELM_MODEL)",
+        help="Architecture (transformer causal LM, or canon enc-dec infill)",
     )
     p.add_argument(
         "--tokenizer",
         "-t",
         choices=TOKENIZER_NAMES,
-        help="Input representation (default: event)",
-    )
-    p.add_argument(
-        "--all-tokenizers",
-        action="store_true",
-        help=f"Train each tokenizer for this model: {', '.join(TRAIN_TOKENIZERS)}",
-    )
-    p.add_argument(
-        "--only",
-        metavar="NAMES",
-        help="With --all-tokenizers, comma-separated subset",
+        default="remi",
+        help="Input representation (default: remi)",
     )
     p.add_argument(
         "--device",
@@ -205,12 +212,12 @@ examples:
     p.add_argument("--epoch", "-e", type=int, metavar="N", help="Resume from epoch-N")
     p.add_argument("--weights", "-w", metavar="PATH", help="Initial .pt weights")
     p.add_argument("--start-epoch", type=int, metavar="N", help="0-based resume index")
-    p.add_argument("--epochs", type=int, default=320, help="Total epochs (default: 320)")
+    p.add_argument("--epochs", type=int, default=40, help="Total epochs (default: 40)")
     p.add_argument(
         "--seq-len",
         type=int,
         metavar="N",
-        help="Override window length (default: per-tokenizer)",
+        help="Override window length (default: 4096 event / 2048 remi)",
     )
     p.add_argument(
         "--limit-files",
@@ -219,10 +226,24 @@ examples:
         help="Use only N files (smoke tests)",
     )
     p.add_argument(
+        "--cache-only",
+        action="store_true",
+        help="Encode MIDI to data/token_cache and exit (no GPU train)",
+    )
+    p.add_argument(
         "--lr",
         type=float,
         metavar="LR",
         help="Learning rate override (e.g. 1e-4 for fine-tuning)",
+    )
+    p.add_argument(
+        "--codename",
+        metavar="NAME",
+        choices=CHECKPOINT_CODENAMES,
+        help=(
+            "Also copy best weights to {name}.pt "
+            f"({', '.join(CHECKPOINT_CODENAMES)})"
+        ),
     )
     args = p.parse_args()
 
@@ -230,63 +251,7 @@ examples:
         p.error("use --epoch or --weights, not both")
     if args.epoch is not None:
         args.weights = str(args.epoch)
-    if args.all_tokenizers and args.tokenizer:
-        p.error("use --tokenizer or --all-tokenizers, not both")
-    if args.only and not args.all_tokenizers:
-        p.error("--only requires --all-tokenizers")
-
     return args
-
-
-def _tokenizer_list(args) -> list[str]:
-    if args.all_tokenizers:
-        if args.only:
-            names = [s.strip().lower() for s in args.only.split(",") if s.strip()]
-            bad = [n for n in names if n not in TOKENIZER_NAMES]
-            if bad:
-                raise SystemExit(f"Unknown tokenizer(s): {bad}")
-            return names
-        return list(TRAIN_TOKENIZERS)
-    return [args.tokenizer or "event"]
-
-
-def _build_model(
-    model_name: str,
-    train_dataset,
-    val_dataset,
-    tokenizer,
-    device,
-    pad_id,
-    train_cfg,
-    ckpt_root,
-    seq_len: int,
-):
-    model_name = normalize_model(model_name)
-    common = dict(
-        batch_size=train_cfg["batch_size"],
-        accum_steps=train_cfg["accum_steps"],
-        num_workers=train_cfg["num_workers"],
-        checkpoint_dir=str(ckpt_root),
-        lr=train_cfg.get("lr"),
-    )
-    if model_name == "lstm":
-        return LSTM(
-            train_dataset, val_dataset, tokenizer.vocab_size, device, pad_id, **common
-        )
-    if model_name == "transformer":
-        return Transformer(
-            train_dataset,
-            val_dataset,
-            tokenizer.vocab_size,
-            device,
-            pad_id,
-            max_len=seq_len,
-            **common,
-        )
-    raise NotImplementedError(
-        f"Model {model_name!r} is not implemented yet. "
-        f"Checkpoints would live under checkpoints/{model_name}/{{tokenizer}}/"
-    )
 
 
 def train_one(
@@ -301,14 +266,33 @@ def train_one(
     dataset: str | None = None,
     seq_len: int | None = None,
     limit_files: int | None = None,
+    codename: str | None = None,
+    cache_only: bool = False,
 ) -> None:
     model_name = normalize_model(model_name)
+    if model_name == "canon" and tokenizer_name != "remi":
+        raise SystemExit("canon requires --tokenizer remi (bar spans)")
     out_weights, ckpt_root = _paths_for_run(model_name, tokenizer_name)
-    train_dataset, val_dataset, tokenizer = load_datasets(
-        tokenizer_name, dataset=dataset, seq_len=seq_len, limit_files=limit_files
-    )
+    if model_name == "canon":
+        train_dataset, val_dataset, tokenizer = load_span_datasets(
+            tokenizer_name,
+            dataset=dataset,
+            seq_len=seq_len,
+            limit_files=limit_files,
+            enc_len=ENC_MAX_LEN,
+            dec_len=DEC_MAX_LEN,
+        )
+    else:
+        train_dataset, val_dataset, tokenizer = load_datasets(
+            tokenizer_name, dataset=dataset, seq_len=seq_len, limit_files=limit_files
+        )
+    if cache_only:
+        print(f"Token cache ready for {model_name}/{tokenizer_name} dataset={dataset}")
+        return
     pad_id = tokenizer.token_to_id["PAD"]
-    effective_seq_len = train_dataset.seq_len
+    effective_seq_len = getattr(train_dataset, "seq_len", None) or (
+        train_dataset.source.seq_len if hasattr(train_dataset, "source") else 2048
+    )
 
     start_epoch = 0
     init_weights: Path | None = None
@@ -338,36 +322,93 @@ def train_one(
     print(f"Checkpoints -> {ckpt_root.resolve()}/")
     print(f"{'=' * 60}")
 
-    model = _build_model(
-        model_name,
-        train_dataset,
-        val_dataset,
-        tokenizer,
-        device,
-        pad_id,
-        train_cfg,
-        ckpt_root,
-        effective_seq_len,
-    ).to(device)
+    if model_name == "canon":
+        model = Canon(
+            train_dataset,
+            val_dataset,
+            tokenizer.vocab_size,
+            device,
+            pad_id,
+            tokenizer=tokenizer,
+            batch_size=train_cfg["batch_size"],
+            accum_steps=train_cfg["accum_steps"],
+            num_workers=train_cfg["num_workers"],
+            checkpoint_dir=str(ckpt_root),
+            lr=train_cfg.get("lr"),
+            enc_max_len=ENC_MAX_LEN,
+            dec_max_len=DEC_MAX_LEN,
+        ).to(device)
+    else:
+        model = Transformer(
+            train_dataset,
+            val_dataset,
+            tokenizer.vocab_size,
+            device,
+            pad_id,
+            tokenizer=tokenizer,
+            batch_size=train_cfg["batch_size"],
+            accum_steps=train_cfg["accum_steps"],
+            num_workers=train_cfg["num_workers"],
+            checkpoint_dir=str(ckpt_root),
+            max_len=effective_seq_len,
+            lr=train_cfg.get("lr"),
+        ).to(device)
 
     if init_weights is not None:
         state = torch.load(init_weights, map_location=device, weights_only=True)
-        model.load_state_dict(state)
+        # New emotion rows sit at the end of the vocab; copy overlapping weights.
+        current = model.state_dict()
+        for key, tensor in state.items():
+            if key in current and current[key].shape == tensor.shape:
+                current[key] = tensor
+            elif key in current and current[key].ndim == tensor.ndim:
+                slices = tuple(slice(0, min(a, b)) for a, b in zip(current[key].shape, tensor.shape))
+                current[key][slices] = tensor[slices]
+        model.load_state_dict(current)
+
+    if torch.distributed.is_initialized():
+        local = int(os.environ["LOCAL_RANK"])
+        model.ddp = torch.nn.parallel.DistributedDataParallel(
+            model, device_ids=[local], output_device=local
+        )
 
     model.fit(epochs=epochs, start_epoch=start_epoch)
-    torch.save(model.state_dict(), out_weights)
-    print(f"[{model_name}/{tokenizer_name}] saved {out_weights.resolve()}")
+    rank0 = (not torch.distributed.is_initialized()) or torch.distributed.get_rank() == 0
+    if rank0:
+        torch.save(model.state_dict(), out_weights)
+        print(f"[{model_name}/{tokenizer_name}] saved {out_weights.resolve()}")
+        if codename:
+            named = ckpt_root / f"{normalize_codename(codename)}.pt"
+            shutil.copy2(out_weights, named)
+            print(f"[{model_name}/{tokenizer_name}] saved {named.resolve()}")
 
 
 def main():
     args = parse_args()
     model_name = normalize_model(args.model)
     dataset = normalize_dataset(args.dataset)
-    names = _tokenizer_list(args)
 
+    if args.cache_only:
+        print(f"Cache-only encode: model={model_name} dataset={dataset} tokenizer={args.tokenizer}")
+        train_one(
+            model_name,
+            args.tokenizer,
+            device="cpu",
+            train_cfg={"batch_size": 1, "accum_steps": 1, "num_workers": 0},
+            epochs=1,
+            weights_spec=None,
+            start_epoch_override=None,
+            dataset=dataset,
+            seq_len=args.seq_len,
+            limit_files=args.limit_files,
+            cache_only=True,
+        )
+        return
+
+    _init_distributed()
     device = _resolve_device(None if args.device == "auto" else args.device)
     _warn_cuda_driver_mismatch()
-    train_cfg = _training_config(device)
+    train_cfg = _training_config(device, model_name)
     if args.lr:
         train_cfg["lr"] = args.lr
 
@@ -378,38 +419,31 @@ def main():
         print("Using device:", device)
 
     print(
-        f"Model: {model_name} | dataset: {dataset} | tokenizers: {', '.join(names)} | "
+        f"Model: {model_name} | dataset: {dataset} | tokenizer: {args.tokenizer} | "
         f"batch={train_cfg['batch_size']} accum={train_cfg['accum_steps']}"
     )
 
     start = time.time()
-    weights_arg = args.weights if len(names) == 1 else None
-    if args.weights and len(names) > 1:
-        print("Note: --weights/--epoch only applied when training a single tokenizer.")
-
     try:
-        for i, tok in enumerate(names):
-            if i > 0 and device == "cuda":
-                torch.cuda.empty_cache()
-            train_one(
-                model_name,
-                tok,
-                device=device,
-                train_cfg=train_cfg,
-                epochs=args.epochs,
-                weights_spec=weights_arg,
-                start_epoch_override=args.start_epoch,
-                dataset=dataset,
-                seq_len=args.seq_len,
-                limit_files=args.limit_files,
-            )
-
+        train_one(
+            model_name,
+            args.tokenizer,
+            device=device,
+            train_cfg=train_cfg,
+            epochs=args.epochs,
+            weights_spec=args.weights,
+            start_epoch_override=args.start_epoch,
+            dataset=dataset,
+            seq_len=args.seq_len,
+            limit_files=args.limit_files,
+            codename=args.codename,
+        )
         notify_training_complete(
             success=True,
             epochs=args.epochs,
             device=device,
             elapsed_s=time.time() - start,
-            weights_path=f"checkpoints/{model_name}/{{tokenizer}}/weights.pt",
+            weights_path=f"checkpoints/{model_name}/{args.tokenizer}/weights.pt",
         )
     except Exception as exc:
         notify_training_complete(

@@ -7,6 +7,11 @@ cd "$ROOT"
 
 FETCH_MAESTRO=false
 FETCH_POP909=false
+FETCH_EXTRA=false
+FETCH_CCBY=false
+FETCH_GIGAMIDI=false
+GIGAMIDI_MAX="${GIGAMIDI_MAX:-50000}"
+EXTRA_NAMES=()
 INSTALL_LAB=false
 INSTALL_SYSTEM=false
 CPU_ONLY=false
@@ -33,6 +38,12 @@ Options:
   --cpu           Keep CPU/MPS PyTorch from PyPI (no CUDA wheel reinstall)
   --fetch-maestro Download MAESTRO v3.0.0 MIDI (~120 MB) into data/
   --fetch-pop909  Download POP909 pop-song MIDI (~23 MB) into data/
+  --fetch-extra   EMOPIA + Pop1K7 + ADL piano + ASAP (needs git, ~hours of MIDI)
+  --fetch-ccby    GiantMIDI-Piano + ATEPP + PDMX (CC BY, for canon)
+  --fetch-gigamidi Piano-ish GigaMIDI subset (needs HF_TOKEN + datasets pkg; NC)
+  --gigamidi-max N Cap GigaMIDI files (default 50000)
+  --fetch-emopia|--fetch-pop1k7|--fetch-adl|--fetch-asap|--fetch-giantmidi|--fetch-atepp|--fetch-pdmx
+                  Individual extra corpora (see scripts/fetch_datasets.py)
   --system        Install OS packages (Linux: tmux, curl, unzip via apt/dnf/apk)
   --lab           Also install music21 + npm UI deps
   -h, --help      Show this help
@@ -140,9 +151,15 @@ pick_torch_cuda_index() {
 install_cuda_torch() {
   configure_uv
   TORCH_CUDA_INDEX="$(pick_torch_cuda_index)"
-  log "Installing PyTorch from ${TORCH_CUDA_INDEX} (auto-selected for this GPU)..."
+  # cu124 wheels top out at 2.6.x; 2.7+ lives on cu128 (Blackwell).
+  if [[ "${TORCH_CUDA_INDEX}" == *cu128* ]]; then
+    torch_spec="torch>=2.7"
+  else
+    torch_spec="torch==2.6.0"
+  fi
+  log "Installing ${torch_spec} from ${TORCH_CUDA_INDEX} (auto-selected for this GPU)..."
   uv pip uninstall -y torch 2>/dev/null || true
-  uv pip install --reinstall "torch>=2.7" --index-url "${TORCH_CUDA_INDEX}"
+  uv pip install --reinstall "${torch_spec}" --index-url "${TORCH_CUDA_INDEX}"
   log "CUDA smoke test..."
   uv run python -c "
 import torch
@@ -164,9 +181,9 @@ want_cuda() {
 }
 
 install_system_packages() {
-  local pkgs=(tmux curl unzip ca-certificates)
+  local pkgs=(tmux curl unzip ca-certificates git)
   local missing=()
-  for cmd in tmux curl unzip; do
+  for cmd in tmux curl unzip git; do
     have "$cmd" || missing+=("$cmd")
   done
   if [[ ${#missing[@]} -eq 0 ]]; then
@@ -287,11 +304,10 @@ setup_env_file() {
 
 setup_dirs() {
   mkdir -p "$ROOT/src/checkpoints" "$ROOT/logs" "$ROOT/data"
-  for model in lstm transformer; do
-    for tok in event raw remi piano_roll; do
-      mkdir -p "$ROOT/src/checkpoints/$model/$tok"
-    done
+  for tok in event remi; do
+    mkdir -p "$ROOT/src/checkpoints/transformer/$tok"
   done
+  mkdir -p "$ROOT/src/checkpoints/canon/remi"
 }
 
 setup_lab_ui() {
@@ -299,9 +315,11 @@ setup_lab_ui() {
     warn "--lab skipped UI build: npm not found (install Node.js)"
     return
   fi
-  log "Installing UI dependencies..."
-  (cd "$ROOT/ui" && npm install)
-  log "UI deps installed (run ./scripts/run_lab.sh to build and serve)"
+  log "Installing UI dependencies (npm registry: npmmirror)..."
+  export ELECTRON_MIRROR="${ELECTRON_MIRROR:-https://npmmirror.com/mirrors/electron/}"
+  export ELECTRON_BUILDER_BINARIES_MIRROR="${ELECTRON_BUILDER_BINARIES_MIRROR:-https://npmmirror.com/mirrors/electron-builder-binaries/}"
+  (cd "$ROOT" && npm install)
+  log "JS workspaces installed (run ./scripts/run_lab.sh to build and serve)"
 }
 
 verify_training() {
@@ -315,7 +333,7 @@ sys.path.insert(0, str(Path("src").resolve()))
 
 import pretty_midi
 import torch
-from utils.data import DATASET_NAMES, dataset_dir, dataset_files, seq_len_for
+from utils.data import ATOMIC_DATASETS, dataset_dir, dataset_files, seq_len_for
 
 print(f"  Python:  {sys.version.split()[0]}")
 print(f"  PyTorch: {torch.__version__}")
@@ -351,14 +369,14 @@ if not torch.cuda.is_available() and shutil.which("nvidia-smi"):
     sys.exit(1)
 
 total = 0
-for name in DATASET_NAMES:
+for name in ATOMIC_DATASETS:
     count = len(dataset_files(name))
     total += count
     print(f"  Data:    {name} -> {dataset_dir(name)} ({count} files)")
 print(f"  seq_len: {seq_len_for('event')} (event tokenizer)")
 
 if total == 0:
-    print("\nNo training MIDI found. Run with --fetch-pop909 (or --fetch-maestro).")
+    print("\nNo training MIDI found. Run with --fetch-pop909 (or --fetch-extra).")
     sys.exit(1)
 PY
 }
@@ -369,6 +387,15 @@ while [[ $# -gt 0 ]]; do
     --cpu) CPU_ONLY=true; shift ;;
     --fetch-maestro) FETCH_MAESTRO=true; shift ;;
     --fetch-pop909) FETCH_POP909=true; shift ;;
+    --fetch-extra) FETCH_EXTRA=true; shift ;;
+    --fetch-ccby) FETCH_CCBY=true; shift ;;
+    --fetch-gigamidi) FETCH_GIGAMIDI=true; shift ;;
+    --gigamidi-max)
+      GIGAMIDI_MAX="$2"
+      shift 2
+      ;;
+    --fetch-emopia|--fetch-pop1k7|--fetch-adl|--fetch-asap|--fetch-giantmidi|--fetch-atepp|--fetch-pdmx)
+      EXTRA_NAMES+=("${1#--fetch-}"); shift ;;
     --system) INSTALL_SYSTEM=true; shift ;;
     --lab) INSTALL_LAB=true; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -389,6 +416,20 @@ fi
 
 $FETCH_MAESTRO && fetch_maestro
 $FETCH_POP909 && fetch_pop909
+if $FETCH_EXTRA; then
+  python3 "$ROOT/scripts/fetch_datasets.py" extra
+fi
+if $FETCH_CCBY; then
+  python3 "$ROOT/scripts/fetch_datasets.py" ccby
+fi
+if ((${#EXTRA_NAMES[@]})); then
+  python3 "$ROOT/scripts/fetch_datasets.py" "${EXTRA_NAMES[@]}"
+fi
+if $FETCH_GIGAMIDI; then
+  log "Installing Hugging Face datasets extra for GigaMIDI..."
+  uv pip install datasets huggingface_hub
+  python3 "$ROOT/scripts/fetch_datasets.py" gigamidi --max-files "$GIGAMIDI_MAX"
+fi
 setup_env_file
 setup_dirs
 $INSTALL_LAB && setup_lab_ui
@@ -403,9 +444,12 @@ Setup complete.
 
 Optional:
   ./scripts/setup.sh --fetch-pop909    # download POP909 (pop training data)
-  ./scripts/setup.sh --fetch-maestro   # download MAESTRO if you skipped it
+  ./scripts/setup.sh --fetch-extra     # EMOPIA + Pop1K7 + ADL + ASAP
+  ./scripts/setup.sh --fetch-ccby      # GiantMIDI-Piano + ATEPP + PDMX
+  ./scripts/setup.sh --fetch-maestro   # classical piano pretrain
+  ./scripts/setup.sh --fetch-gigamidi  # 50k piano-ish GigaMIDI (needs HF_TOKEN, NC)
   ./scripts/setup.sh --cuda            # force CUDA PyTorch wheels
   ./scripts/train_tmux.sh              # detached training + log
-  ./scripts/run_lab.sh                 # inference lab (needs --lab or npm install)
+  ./scripts/run_lab.sh                 # build UI + serve (needs --lab or npm install)
 
 EOF

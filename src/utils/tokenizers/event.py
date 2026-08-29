@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pretty_midi
 
+from utils.emotion import EMOTION_TAGS, emotion_token
+from utils.instrument import INSTRUMENT_TAGS, instrument_token
 from utils.midi_timing import MAX_TIME_SHIFT_STEPS, seconds_to_timesteps, timesteps_to_seconds
 from utils.tokenizers.base import BaseMidiTokenizer, TokenizerConfig
 
@@ -26,6 +28,11 @@ class EventTokenizer(BaseMidiTokenizer):
         if self.cfg.use_program:
             for program in range(128):
                 self._add(f"PROGRAM_{program}")
+        # Appended so older checkpoints keep the same note/time ids.
+        for tag in EMOTION_TAGS:
+            self._add(emotion_token(tag))
+        for tag in INSTRUMENT_TAGS:
+            self._add(instrument_token(tag))
 
     def _add_time_shift(self, tokens: list[str], steps: int) -> None:
         while steps > 0:
@@ -33,8 +40,7 @@ class EventTokenizer(BaseMidiTokenizer):
             tokens.append(f"TIME_SHIFT_{shift}")
             steps -= shift
 
-    def encode_midi(self, midi_path: str | Path) -> list[int]:
-        midi = pretty_midi.PrettyMIDI(str(midi_path))
+    def encode_pretty_midi(self, midi: pretty_midi.PrettyMIDI) -> list[int]:
         events: list[tuple[float, str]] = []
 
         for inst in midi.instruments:
@@ -68,7 +74,9 @@ class EventTokenizer(BaseMidiTokenizer):
         tokens.append("EOS")
         return self.ids_from_tokens(tokens)
 
-    def tokens_to_midi(self, ids: list[int], output_path: str | Path) -> Path:
+    def tokens_to_midi(
+        self, ids: list[int], output_path: str | Path, *, tempo: float | None = None
+    ) -> Path:
         tokens = self.decode_tokens(ids)
         current_time = 0.0
         pending_velocity = 64
@@ -78,7 +86,7 @@ class EventTokenizer(BaseMidiTokenizer):
         instrument = pretty_midi.Instrument(program=0)
 
         for tok in tokens:
-            if tok in ("BOS", "PAD", "UNK"):
+            if tok in ("BOS", "PAD", "UNK") or tok.startswith(("EMOTION_", "INST_")):
                 continue
             if tok == "EOS":
                 break

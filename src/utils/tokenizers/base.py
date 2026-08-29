@@ -53,6 +53,13 @@ class BaseMidiTokenizer(ABC):
     def bin_to_velocity(self, bin_idx: int) -> int:
         return min(127, int((bin_idx + 0.5) * 128 / self.cfg.velocity_bins))
 
+    def encode_midi(self, midi_path: str | Path) -> list[int]:
+        midi = pretty_midi.PrettyMIDI(str(midi_path))
+        return self.encode_pretty_midi(midi)
+
+    def encode_pretty_midi(self, midi: pretty_midi.PrettyMIDI) -> list[int]:
+        raise NotImplementedError
+
     def _collect_notes(self, midi_path: str | Path) -> list[pretty_midi.Note]:
         midi = pretty_midi.PrettyMIDI(str(midi_path))
         notes: list[pretty_midi.Note] = []
@@ -73,9 +80,7 @@ class BaseMidiTokenizer(ABC):
         return [self.id_to_token.get(i, "UNK") for i in ids]
 
     @abstractmethod
-    def encode_midi(self, midi_path: str | Path) -> list[int]:
-        raise NotImplementedError
-
-    @abstractmethod
-    def tokens_to_midi(self, ids: list[int], output_path: str | Path) -> Path:
+    def tokens_to_midi(
+        self, ids: list[int], output_path: str | Path, *, tempo: float | None = None
+    ) -> Path:
         raise NotImplementedError

@@ -13,12 +13,13 @@ source .venv/bin/activate
 uv pip install -q fastapi uvicorn python-multipart 2>/dev/null || true
 uv pip install -q music21 2>/dev/null || true
 
-if [[ -d ui/node_modules ]]; then
-  (cd ui && npm run build)
-else
-  echo "Building UI (first time installs npm deps)…"
-  (cd ui && npm install && npm run build)
+if [[ ! -d node_modules ]]; then
+  echo "Installing JS workspaces…"
+  npm install
 fi
+npm run build
 
-echo "Lab UI: http://localhost:8000"
+echo "Site:     http://localhost:8000/"
+echo "Clavier:  http://localhost:8000/app/"
+echo "Dev:      http://localhost:8000/dev/?ckpt=etude"
 cd src && python api.py

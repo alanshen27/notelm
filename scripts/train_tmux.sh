@@ -6,7 +6,7 @@ SESSION="notelm-train"
 LOG_DIR="$ROOT/logs"
 LOG_FILE="$LOG_DIR/train-$(date +%Y%m%d-%H%M%S).log"
 
-mkdir -p "$LOG_DIR" "$ROOT/src/checkpoints"/{lstm,transformer}/{event,raw,remi,piano_roll}
+mkdir -p "$LOG_DIR" "$ROOT/src/checkpoints/transformer/"{event,remi}
 
 if ! command -v tmux >/dev/null 2>&1; then
   echo "tmux is not installed."

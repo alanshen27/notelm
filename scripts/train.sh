@@ -9,7 +9,7 @@ export PATH="${HOME}/.local/bin:${PATH}"
 export UV_LINK_MODE="${UV_LINK_MODE:-copy}"
 
 if [[ ! -d .venv ]]; then
-  echo "No .venv — run: ./scripts/setup.sh --cuda --fetch-maestro" >&2
+  echo "No .venv — run: ./scripts/setup.sh --cuda --fetch-pop909" >&2
   exit 1
 fi
 

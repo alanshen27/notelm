@@ -1,4 +1,13 @@
-# Python-generated files
+# Datasets are fetched by scripts/setup.sh, not stored in git.
+# Ignore the directory contents (not `data/` itself) so .gitkeep can be re-included.
+data/*
+!data/.gitkeep
+
+# Per-epoch training dumps. Named snapshots (prelude.pt, invention.pt, …) stay tracked.
+**/epoch-*/
+**/checkpoints/**/best.pt
+**/checkpoints/**/pretrain.pt
+checkpoints_deprecated/
 __pycache__/
 *.py[oc]
 build/
@@ -9,8 +18,15 @@ wheels/
 # Virtual environments
 .venv
 .env
+.hf_token
 .runpod_pod.json
+.runpod_pod_*.json
 outputs/
+node_modules/
+apps/*/dist/
+apps/web/.next/
+apps/web/out/
+.next/
 ui/node_modules/
 ui/dist/
 .DS_STORE

@@ -36,9 +36,14 @@ pick_index() {
 
 INDEX=$(pick_index)
 echo "==> GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo unknown)"
-echo "==> Reinstalling torch>=2.7 from ${INDEX}"
+if [[ "${INDEX}" == *cu128* ]]; then
+  SPEC="torch>=2.7"
+else
+  SPEC="torch==2.6.0"
+fi
+echo "==> Reinstalling ${SPEC} from ${INDEX}"
 uv pip uninstall -y torch 2>/dev/null || true
-uv pip install --reinstall "torch>=2.7" --index-url "${INDEX}"
+uv pip install --reinstall "${SPEC}" --index-url "${INDEX}"
 
 echo "==> CUDA smoke test..."
 python -c "

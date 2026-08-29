@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import re
+import shutil
 from pathlib import Path
 
 import torch
@@ -12,49 +13,114 @@ from torch import nn, optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from utils.music_loss import PC_AUX, class_weights, pitch_class_loss, pitch_lookups
+
 D_MODEL = 512
 N_HEADS = 8
-N_LAYERS = 6
+N_LAYERS = 8
 FFN_DIM = 2048
 DROPOUT = 0.1
 MAX_LEN = 4096
+ROPE_BASE = 10_000.0
 
 LR = 3e-4
 WEIGHT_DECAY = 0.01
 GRAD_CLIP = 1.0
 
 
-class CausalSelfAttention(nn.Module):
-    def __init__(self, d_model: int, n_heads: int, dropout: float):
+def _rotate_half(x: torch.Tensor) -> torch.Tensor:
+    x1, x2 = x.chunk(2, dim=-1)
+    return torch.cat((-x2, x1), dim=-1)
+
+
+class RotaryEmbedding(nn.Module):
+    """RoPE: rotate Q/K by token distance instead of adding absolute pos vectors."""
+
+    def __init__(self, head_dim: int, base: float = ROPE_BASE):
+        super().__init__()
+        if head_dim % 2 != 0:
+            raise ValueError(f"RoPE head_dim must be even, got {head_dim}")
+        inv_freq = 1.0 / (base ** (torch.arange(0, head_dim, 2).float() / head_dim))
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+    def _cos_sin(self, seq_len: int, device: torch.device, dtype: torch.dtype):
+        t = torch.arange(seq_len, device=device, dtype=self.inv_freq.dtype)
+        freqs = torch.outer(t, self.inv_freq)
+        emb = torch.cat((freqs, freqs), dim=-1)
+        cos = emb.cos().to(dtype=dtype)[None, None, :, :]
+        sin = emb.sin().to(dtype=dtype)[None, None, :, :]
+        return cos, sin
+
+    def rotate(self, q: torch.Tensor, k: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        cos, sin = self._cos_sin(q.size(2), q.device, q.dtype)
+        q = (q * cos) + (_rotate_half(q) * sin)
+        k = (k * cos) + (_rotate_half(k) * sin)
+        return q, k
+
+
+class SelfAttention(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        n_heads: int,
+        dropout: float,
+        *,
+        causal: bool = True,
+        use_rope: bool = True,
+    ):
         super().__init__()
         assert d_model % n_heads == 0
         self.n_heads = n_heads
+        self.causal = causal
         self.qkv = nn.Linear(d_model, 3 * d_model)
         self.proj = nn.Linear(d_model, d_model)
         self.dropout = dropout
+        self.rope = RotaryEmbedding(d_model // n_heads) if use_rope else None
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, key_padding_mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
         b, t, d = x.shape
         q, k, v = self.qkv(x).chunk(3, dim=-1)
         q = q.view(b, t, self.n_heads, d // self.n_heads).transpose(1, 2)
         k = k.view(b, t, self.n_heads, d // self.n_heads).transpose(1, 2)
         v = v.view(b, t, self.n_heads, d // self.n_heads).transpose(1, 2)
+        if self.rope is not None:
+            q, k = self.rope.rotate(q, k)
+        attn_mask = None
+        if key_padding_mask is not None:
+            attn_mask = key_padding_mask[:, None, None, :]
         out = F.scaled_dot_product_attention(
             q, k, v,
+            attn_mask=attn_mask,
             dropout_p=self.dropout if self.training else 0.0,
-            is_causal=True,
+            is_causal=self.causal,
         )
         out = out.transpose(1, 2).reshape(b, t, d)
         return self.proj(out)
 
 
+CausalSelfAttention = SelfAttention
+
+
 class Block(nn.Module):
     """Pre-norm transformer block: LN -> attention, LN -> MLP."""
 
-    def __init__(self, d_model: int, n_heads: int, ffn_dim: int, dropout: float):
+    def __init__(
+        self,
+        d_model: int,
+        n_heads: int,
+        ffn_dim: int,
+        dropout: float,
+        use_rope: bool = True,
+        *,
+        causal: bool = True,
+    ):
         super().__init__()
         self.ln1 = nn.LayerNorm(d_model)
-        self.attn = CausalSelfAttention(d_model, n_heads, dropout)
+        self.attn = SelfAttention(
+            d_model, n_heads, dropout, causal=causal, use_rope=use_rope
+        )
         self.ln2 = nn.LayerNorm(d_model)
         self.mlp = nn.Sequential(
             nn.Linear(d_model, ffn_dim),
@@ -63,8 +129,10 @@ class Block(nn.Module):
             nn.Dropout(dropout),
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.attn(self.ln1(x))
+    def forward(
+        self, x: torch.Tensor, key_padding_mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        x = x + self.attn(self.ln1(x), key_padding_mask=key_padding_mask)
         x = x + self.mlp(self.ln2(x))
         return x
 
@@ -81,15 +149,18 @@ class MidiTransformer(nn.Module):
         ffn_dim: int = FFN_DIM,
         dropout: float = DROPOUT,
         max_len: int = MAX_LEN,
+        use_rope: bool = True,
     ):
         super().__init__()
         self.vocab_size = vocab_size
         self.max_len = max_len
+        self.use_rope = use_rope
         self.embedding = nn.Embedding(vocab_size, d_model)
-        self.pos_embedding = nn.Embedding(max_len, d_model)
+        self.pos_embedding = None if use_rope else nn.Embedding(max_len, d_model)
         self.drop = nn.Dropout(dropout)
         self.blocks = nn.ModuleList(
-            Block(d_model, n_heads, ffn_dim, dropout) for _ in range(n_layers)
+            Block(d_model, n_heads, ffn_dim, dropout, use_rope=use_rope)
+            for _ in range(n_layers)
         )
         self.norm = nn.LayerNorm(d_model)
         self.fc = nn.Linear(d_model, vocab_size, bias=False)
@@ -110,8 +181,11 @@ class MidiTransformer(nn.Module):
         b, t = x.shape
         if t > self.max_len:
             raise ValueError(f"Sequence length {t} exceeds max_len {self.max_len}")
-        pos = torch.arange(t, device=x.device)
-        h = self.drop(self.embedding(x) + self.pos_embedding(pos)[None, :, :])
+        h = self.embedding(x)
+        if self.pos_embedding is not None:
+            pos = torch.arange(t, device=x.device)
+            h = h + self.pos_embedding(pos)[None, :, :]
+        h = self.drop(h)
         for block in self.blocks:
             h = block(h)
         return self.fc(self.norm(h))
@@ -120,7 +194,8 @@ class MidiTransformer(nn.Module):
     def from_state_dict(cls, state: dict) -> "MidiTransformer":
         """Rebuild architecture from tensor shapes (checkpoints are plain state dicts)."""
         vocab_size, d_model = state["embedding.weight"].shape
-        max_len = state["pos_embedding.weight"].shape[0]
+        use_rope = "pos_embedding.weight" not in state
+        max_len = MAX_LEN if use_rope else state["pos_embedding.weight"].shape[0]
         ffn_dim = state["blocks.0.mlp.0.weight"].shape[0]
         layer_ids = {
             int(m.group(1))
@@ -135,13 +210,15 @@ class MidiTransformer(nn.Module):
             ffn_dim=ffn_dim,
             dropout=0.0,
             max_len=max_len,
+            use_rope=use_rope,
         )
-        model.load_state_dict(state)
+        # Training checkpoints may include loss buffers (pc_of_id, pc_member).
+        model.load_state_dict(state, strict=False)
         return model
 
 
 class Transformer(MidiTransformer):
-    """Training wrapper — mirrors models.lstm.LSTM's fit/checkpoint interface."""
+    """Training wrapper: fit loop, AMP, checkpoints."""
 
     def __init__(
         self,
@@ -150,6 +227,7 @@ class Transformer(MidiTransformer):
         vocab_size,
         device,
         pad_id,
+        tokenizer=None,
         batch_size=2,
         accum_steps=1,
         num_workers=0,
@@ -164,7 +242,17 @@ class Transformer(MidiTransformer):
         self.device = device
         self.accum_steps = accum_steps
         self.checkpoint_dir = Path(checkpoint_dir)
-        self.loss_fn = nn.CrossEntropyLoss(ignore_index=pad_id)
+        self.raw_loss_fn = nn.CrossEntropyLoss(ignore_index=pad_id)
+        if tokenizer is not None:
+            w = class_weights(tokenizer, vocab_size, torch.device(device))
+            self.loss_fn = nn.CrossEntropyLoss(ignore_index=pad_id, weight=w)
+            pc_of, pc_mem = pitch_lookups(tokenizer, vocab_size, torch.device(device))
+            self.register_buffer("pc_of_id", pc_of)
+            self.register_buffer("pc_member", pc_mem)
+            self.use_music_loss = True
+        else:
+            self.loss_fn = nn.CrossEntropyLoss(ignore_index=pad_id)
+            self.use_music_loss = False
         self.use_amp = device == "cuda" and torch.cuda.is_bf16_supported()
 
         pin_memory = device == "cuda"
@@ -181,14 +269,17 @@ class Transformer(MidiTransformer):
         self.val_data = DataLoader(val, shuffle=False, **loader_kw)
 
     def _forward_loss(self, inputs: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        def _compute(logits: torch.Tensor) -> torch.Tensor:
+            ce = self.loss_fn(logits.reshape(-1, self.vocab_size), labels.reshape(-1))
+            if not self.use_music_loss:
+                return ce
+            pc = pitch_class_loss(logits, labels, self.pc_of_id, self.pc_member)
+            return ce + PC_AUX * pc
+
         if self.use_amp:
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                logits = super().forward(inputs)
-                return self.loss_fn(
-                    logits.reshape(-1, self.vocab_size), labels.reshape(-1)
-                )
-        logits = super().forward(inputs)
-        return self.loss_fn(logits.reshape(-1, self.vocab_size), labels.reshape(-1))
+                return _compute(super().forward(inputs))
+        return _compute(super().forward(inputs))
 
     def train_unit(self):
         self.train()
@@ -210,6 +301,10 @@ class Transformer(MidiTransformer):
                 self.optimizer.zero_grad()
 
             batch_bar.set_postfix(loss=f"{loss.item():.4f}")
+            if step == 0 or (step + 1) % 15 == 0:
+                tqdm.write(
+                    f"  batch {step + 1}/{len(self.train_data)} loss={loss.item():.4f}"
+                )
 
         return running_loss / len(self.train_data)
 
@@ -249,9 +344,15 @@ class Transformer(MidiTransformer):
             f"{batches_per_epoch:,} train batches/epoch "
             f"(micro-batch {self.train_data.batch_size}, effective {eff_batch}), "
             f"amp={'bf16' if self.use_amp else 'off'}, "
+            f"pos={'RoPE' if self.use_rope else 'absolute'}, "
+            f"layers={len(self.blocks)}, "
+            f"loss={'weighted CE (pitch/meter) + pitch-class' if self.use_music_loss else 'CE'}, "
             f"checkpoints -> {ckpt_root}/"
         )
         epoch_bar = tqdm(range(start_epoch, epochs), desc="epochs", unit="epoch")
+        best_val = float("inf")
+        best_epoch = start_epoch
+        best_path = None
         for epoch in epoch_bar:
             train_loss = self.train_unit()
             val_loss = self.validate()
@@ -264,4 +365,17 @@ class Transformer(MidiTransformer):
                 f"train loss: {train_loss:.4f} | "
                 f"val loss: {val_loss:.4f} | "
                 f"saved {ckpt}"
+            )
+            if val_loss < best_val:
+                best_val = val_loss
+                best_epoch = epoch + 1
+                best_path = ckpt
+                shutil.copy2(ckpt, self.checkpoint_dir / "best.pt")
+
+        if best_path is not None:
+            state = torch.load(best_path, map_location=self.device, weights_only=True)
+            self.load_state_dict(state)
+            tqdm.write(
+                f"Best val {best_val:.4f} at epoch {best_epoch} — "
+                f"restored {best_path} for weights.pt"
             )

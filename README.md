@@ -1,12 +1,11 @@
 # notelm
 
 A pop co-writer with its own synthesizer. Sketch a chord progression or melody
-on a piano roll; a Transformer trained on pop piano arrangements continues it;
-everything plays through a polyphonic subtractive synth written from scratch as
-a Web Audio AudioWorklet — and bounces to WAV through the same DSP.
+on a piano roll; a Transformer continues it; everything plays through a
+polyphonic subtractive synth written from scratch as a Web Audio AudioWorklet.
 
 ```
-sketch (piano roll) ──► FastAPI /api/continue ──► Transformer (POP909)
+sketch (piano roll) ──► FastAPI /api/continue ──► Transformer
         ▲                                              │
         └── accept / edit / continue again ◄── MIDI continuation
                               │
@@ -16,120 +15,111 @@ sketch (piano roll) ──► FastAPI /api/continue ──► Transformer (POP90
 ## Quickstart
 
 ```bash
-./scripts/setup.sh --fetch-pop909 --lab   # uv + Python 3.13 + deps + data + UI
+./scripts/setup.sh --fetch-pop909 --lab   # uv + Python 3.13 + deps + POP909 + UI
 ./scripts/run_lab.sh                      # build UI, serve on :8000
 ```
 
-Open http://localhost:8000 — the **Co-writer** tab is the instrument, the
-**Research lab** tab is the original sampling/analysis UI.
+Open http://localhost:8000 for the **site**. The instrument is **clavier**
+at http://localhost:8000/app/ — the only place that runs a model.
+
+Desktop (Electron):
+
+```bash
+npm run desktop
+```
+
+More training MIDI (EMOPIA emotion clips, Pop1K7, ADL piano, ASAP scores):
+
+```bash
+./scripts/setup.sh --fetch-extra
+# GigaMIDI is gated + huge; optional piano subset:
+#   uv pip install -e '.[data]'
+#   export HF_TOKEN=hf_...   # accept terms on the Hub first
+#   ./scripts/setup.sh --fetch-gigamidi
+```
 
 ## The co-writer
 
 - Click notes onto the grid (or stamp a progression: I–V–vi–IV etc.).
 - **Continue with AI** primes the model on your notes and returns a
   continuation (amber). **Accept into sketch** merges it and lets you iterate.
-- The synthesizer panel is a real subtractive synth, hand-written DSP running
-  in an AudioWorklet: 2 polyBLEP oscillators, TPT state-variable lowpass with
-  envelope + LFO modulation, ADSR amp envelope, ping-pong delay, Schroeder
-  reverb, soft-clip master. Presets: Neon Keys, Soft Pad, Pluck, Warm Bass.
-- **Export WAV** renders the sketch offline through the same signal chain
-  (`ui/src/synth/worklet.js` is the whole sound engine).
+- **Emotion** (Q1–Q4) is an EMOPIA-style condition. It only changes the notes
+  after you train a checkpoint that includes the extra `EMOTION_*` tokens
+  (current POP909-only weights ignore it).
+- The synthesizer is an AudioWorklet inside clavier (`apps/web/public/synth/worklet.js`). **Export WAV** uses the same DSP.
 
 ## Model
 
-Given MIDI event tokens \(x_{1:T}\), train next-token prediction:
-
-\[
-\mathcal{L} = -\sum_{t=1}^{T-1} \log p_\theta(x_{t+1} \mid x_{\leq t})
-\]
-
-| Architecture | Spec |
-|---|---|
-| `transformer` (default for co-writing) | decoder-only, 6 layers, d_model 512, 8 heads, pre-norm, weight-tied head, ~19M params, AdamW 3e-4, bf16 autocast on CUDA |
-| `lstm` (baseline) | 1 layer, hidden 512, Adam 1e-3 |
-
-Checkpoints: `checkpoints/{model}/{tokenizer}/epoch-N/` + final `weights.pt`.
-Transformer checkpoints are plain state dicts; architecture is re-inferred
-from tensor shapes on load.
+Decoder-only Transformer, 6×512, 8 heads, ~21M params, next-token CE on REMI
+tokens (bar, position, pitch, velocity, duration) plus optional emotion prefix.
+Shipped weights: `src/checkpoints/transformer/remi/{prelude,etude}.pt`.
 
 ## Data
 
-| Dataset | Flag | Contents |
+| Name | Flag | What it is |
 |---|---|---|
-| `pop909` (default) | `--fetch-pop909` (~23 MB) | 909 pop piano arrangements (melody/bridge/piano merged; alternate versions excluded from the split) |
-| `maestro` | `--fetch-maestro` (~120 MB) | MAESTRO v3, 2004 subset (legacy default) |
-| `maestro_full` | `--fetch-maestro` | all MAESTRO years — used for pretraining |
+| `pop909` | `--fetch-pop909` | 909 pop piano arrangements (default) |
+| `pop1k7` | `--fetch-extra` | 1,747 pop piano transcriptions |
+| `emopia` | `--fetch-extra` | pop piano clips with Q1–Q4 emotion in the filename |
+| `adl` | `--fetch-extra` | ~11k piano MIDIs (Lakh piano family + scrapes) |
+| `asap` | `--fetch-extra` | aligned classical piano scores |
+| `maestro` / `maestro_full` | `--fetch-maestro` | MAESTRO performances (2004 / all years) |
+| `gigamidi` | `--fetch-gigamidi` | piano-ish GigaMIDI pull (gated, CC BY-NC; skip for a public app) |
+| `giantmidi` | `--fetch-ccby` | GiantMIDI-Piano (~10k classical transcriptions, CC BY) |
+| `atepp` | `--fetch-ccby` | ATEPP (~11k expressive piano performances) |
+| `pdmx` | `--fetch-ccby` | PDMX public-domain scores, all instruments (MIDI only; cap 40k) |
+| `pop` | union | pop909 + pop1k7 + emopia |
+| `pretrain` | union | maestro_full + adl + asap + piano CC-BY sets |
+| `instruments` | union | PDMX + piano corpora (canon pretrain, all insts) |
+| `piano` | union | piano-only mix (canon finetune) |
+| `canon` | union | instruments mix (single-run fallback) |
+| `all` | union | everything present on disk |
 
-Global grid `TIMESTEP_MS = 20`. Tokenizers: `event` (default), `raw`, `remi`
-(bars/positions — steadiest rhythm), `piano_roll`. Sequence window 4096
-tokens, stride 2048, split by file.
+Split is by **file path** (90/10). Emotion tokens are inferred from EMOPIA-style
+`Q1_…` names. Instrument tokens (`INST_piano`, …) are inferred from GM programs
+in the MIDI. Clavier sends `INST_piano`.
 
-## Training
-
-```bash
-cd src && python train.py --model transformer --dataset pop909 --tokenizer event
-python train.py --model transformer --dataset maestro_full --epochs 20   # pretrain
-python train.py --model transformer --dataset pop909 --epochs 60 \
-  --lr 1e-4 --weights <pretrain.pt> --start-epoch 0                      # fine-tune
-python train.py --all-tokenizers                                        # comparisons
-```
-
-Useful flags: `--seq-len N`, `--limit-files N` (smoke tests), `--lr`,
-`--epoch N` (resume). Long runs: `./scripts/train_tmux.sh <args>`.
-
-### Cloud training (RunPod)
-
-One command per lifecycle step, or fully automatic — provisions a 1x RTX A5000
-(24 GB, secure cloud), syncs the repo, sets up, trains in tmux, monitors with
-a hard budget guard, downloads checkpoints, and terminates the pod:
+Canon trains in two stages: `--dataset instruments` then `--dataset piano`.
 
 ```bash
-export RUNPOD_API_KEY=...        # or put it in .env
-python3 scripts/runpod_train.py check                      # read-only: key, balance, pods
-python3 scripts/runpod_train.py full --recipe pretrain-finetune --budget 25
-python3 scripts/runpod_train.py status | logs | terminate  # manual control
+cd src && python train.py --dataset pop --epochs 40
+python train.py --dataset pretrain --epochs 20
+python train.py --dataset pop --epochs 30 --lr 1e-4 \
+  --weights checkpoints/transformer/remi/prelude.pt --start-epoch 0
 ```
 
-The `pretrain-finetune` recipe runs: MAESTRO-full pretrain (20 epochs) →
-POP909 fine-tune (event) → POP909 REMI. Expected cost ~$4 at $0.27/hr.
+## Cloud (RunPod)
 
-## Inference & API
+```bash
+python3 scripts/runpod_train.py check
+python3 scripts/runpod_train.py train --recipe pop --epochs 40
+# or: --recipe pretrain-finetune
+python3 scripts/runpod_train.py fetch-gigamidi   # 50k piano-ish GigaMIDI for canon
+python3 scripts/runpod_train.py monitor --budget 200 --max-hours 48
+python3 scripts/runpod_train.py terminate   # you stop billing
+```
 
-- `POST /api/continue` — JSON `{notes: [{pitch, start, duration, velocity}]}`
-  → continuation notes + MIDI. Powers the co-writer.
-- `POST /api/generate` — free-form sampling (checkpoint, temperature, top-k,
-  optional seed MIDI upload). Powers the research lab.
-- Every run is logged to `outputs/<run_id>/` (MIDI + full token list + params).
+## Cloud (Render)
 
-Dev mode: `cd src && uvicorn api:app --reload --port 8000` and
-`cd ui && npm run dev` (proxy on :5173).
+Inference only — Render has no GPU. The ~21M Transformer fits in RAM and
+runs on CPU (`render.yaml` + `Dockerfile`). Dashboard: New → Blueprint.
 
-## Portfolio
+`4c-8g` is the default plan (free 512 MB will OOM). Shipped checkpoints are
+`prelude.pt` and `etude.pt` (REMI).
 
-`portfolio/` contains the Stanford Arts Portfolio materials: project
-description, demo video script, and a music résumé template.
+## API
+
+- `POST /api/continue` — `{notes, emotion?}` → continuation. Co-writer.
+- `POST /api/generate` — sampling + optional seed MIDI + emotion.
 
 ## Layout
 
 ```
-src/
-  train.py                 # training CLI (models × tokenizers × datasets)
-  api.py                   # FastAPI: /api/continue + research lab
-  inference.py             # checkpoint loading + generation (lstm + transformer)
-  models/{lstm,transformer}.py
-  utils/data.py            # dataset registry + windowing
-  utils/tokenizers/        # event, raw, remi, piano_roll
-ui/src/
-  CoWriter.jsx             # piano roll + co-writing flow
-  synth/worklet.js         # the synthesizer (hand-written DSP)
-  synth/engine.js          # worklet host + offline WAV render
-scripts/
-  setup.sh                 # bootstrap (+ --fetch-pop909 / --fetch-maestro / --cuda)
-  runpod_train.py          # cloud GPU lifecycle with budget guard
+apps/web                  site + clavier
+apps/afterbar             clavier (legacy vite app)
+src/train.py              Transformer training
+src/api.py                FastAPI — site + /app + /api
+src/models/transformer.py
+src/utils/data.py         corpus registry
+scripts/fetch_datasets.py extra MIDI downloads
 ```
-
-## Email notification
-
-`cp .env.example .env` and fill in SMTP credentials (`NOTIFY_EMAIL`,
-`SMTP_PASS`; optional `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`). Training emails on
-completion or failure.
