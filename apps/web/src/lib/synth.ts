@@ -4,37 +4,87 @@ const workletUrl = "/synth/worklet.js";
 
 type EngineNode = AudioWorkletNode & { port: MessagePort };
 
+function makeAudioContext(): AudioContext {
+  const AC =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+  return new AC();
+}
+
 export class SynthEngine {
   ctx: AudioContext | null = null;
   node: EngineNode | null = null;
+  analyser: AnalyserNode | null = null;
+  master: GainNode | null = null;
   params: Record<string, number> = {};
   onPos: ((s: number) => void) | null = null;
   onEnded: (() => void) | null = null;
 
+  private bins = new Uint8Array(128);
+  private fallbackOsc: OscillatorNode[] = [];
+  private fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Call synchronously from a click so iOS unlocks audio before any await. */
+  unlock() {
+    if (typeof window === "undefined") return;
+    if (!this.ctx) this.ctx = makeAudioContext();
+    if (this.ctx.state === "suspended") void this.ctx.resume();
+    this.ensureMaster();
+    try {
+      const buf = this.ctx.createBuffer(1, 1, this.ctx.sampleRate);
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(this.master!);
+      src.start(0);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  private ensureMaster() {
+    if (!this.ctx || this.master) return;
+    this.master = this.ctx.createGain();
+    this.analyser = this.ctx.createAnalyser();
+    this.analyser.fftSize = 256;
+    this.analyser.smoothingTimeConstant = 0.72;
+    this.master.connect(this.analyser);
+    this.analyser.connect(this.ctx.destination);
+  }
+
+  getLevel() {
+    if (!this.analyser) return 0;
+    if (this.bins.length !== this.analyser.frequencyBinCount) {
+      this.bins = new Uint8Array(this.analyser.frequencyBinCount);
+    }
+    this.analyser.getByteFrequencyData(this.bins);
+    let sum = 0;
+    for (let i = 0; i < this.bins.length; i++) sum += this.bins[i];
+    return sum / this.bins.length / 255;
+  }
+
   async init() {
-    if (this.ctx) return;
-    this.ctx = new AudioContext();
+    this.unlock();
+    if (this.node || !this.ctx) return;
     try {
       await this.ctx.audioWorklet.addModule(workletUrl);
+      this.node = new AudioWorkletNode(this.ctx, "notelm-synth", {
+        numberOfInputs: 0,
+        outputChannelCount: [2],
+      }) as EngineNode;
+      this.node.connect(this.master!);
+      this.node.port.onmessage = (e: MessageEvent) => {
+        if (e.data.type === "pos" && this.onPos) this.onPos(e.data.seconds);
+        if ((e.data.type === "ended" || e.data.type === "stopped") && this.onEnded)
+          this.onEnded();
+      };
+      if (Object.keys(this.params).length) this.setParams(this.params);
     } catch {
-      this.ctx.close();
-      this.ctx = null;
-      throw new Error("Couldn't load the synth. Refresh and try Play again.");
+      this.node = null;
     }
-    this.node = new AudioWorkletNode(this.ctx, "notelm-synth", {
-      numberOfInputs: 0,
-      outputChannelCount: [2],
-    }) as EngineNode;
-    this.node.connect(this.ctx.destination);
-    this.node.port.onmessage = (e: MessageEvent) => {
-      if (e.data.type === "pos" && this.onPos) this.onPos(e.data.seconds);
-      if ((e.data.type === "ended" || e.data.type === "stopped") && this.onEnded)
-        this.onEnded();
-    };
-    if (Object.keys(this.params).length) this.setParams(this.params);
   }
 
   async resume() {
+    this.unlock();
     await this.init();
     if (this.ctx?.state === "suspended") await this.ctx.resume();
   }
@@ -47,12 +97,20 @@ export class SynthEngine {
   async play(notes: SynthNote[]) {
     if (!notes.length) throw new Error("Nothing to play");
     await this.resume();
-    if (!this.node) throw new Error("Synth failed to start");
-    this.node.port.postMessage({ type: "sequence", notes });
+    if (!this.ctx) throw new Error("Synth failed to start");
+    this.clearFallback();
+    if (this.node) {
+      this.node.port.postMessage({ type: "sequence", notes });
+      return;
+    }
+    this.playFallback(notes);
   }
 
   stop() {
     this.node?.port.postMessage({ type: "stop" });
+    const hadFallback = this.fallbackOsc.length > 0 || this.fallbackTimer;
+    this.clearFallback();
+    if (hadFallback) this.onEnded?.();
   }
 
   async noteOn(pitch: number, velocity = 100) {
@@ -62,6 +120,48 @@ export class SynthEngine {
 
   noteOff(pitch: number) {
     this.node?.port.postMessage({ type: "noteOff", pitch });
+  }
+
+  private playFallback(notes: SynthNote[]) {
+    const ctx = this.ctx!;
+    const now = ctx.currentTime + 0.04;
+    const bus = ctx.createGain();
+    bus.gain.value = 0.2;
+    bus.connect(this.master!);
+    for (const n of notes) {
+      const osc = ctx.createOscillator();
+      osc.type = "triangle";
+      osc.frequency.value = 440 * 2 ** ((n.pitch - 69) / 12);
+      const g = ctx.createGain();
+      const t0 = now + n.start;
+      const t1 = t0 + Math.max(0.06, n.duration);
+      const peak = Math.max(0.002, (n.velocity / 127) * 0.42);
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(peak, t0 + 0.018);
+      g.gain.exponentialRampToValueAtTime(0.0001, t1);
+      osc.connect(g);
+      g.connect(bus);
+      osc.start(t0);
+      osc.stop(t1 + 0.03);
+      this.fallbackOsc.push(osc);
+    }
+    const end = Math.max(...notes.map((n) => n.start + n.duration), 0);
+    this.fallbackTimer = setTimeout(() => this.onEnded?.(), end * 1000 + 280);
+  }
+
+  private clearFallback() {
+    if (this.fallbackTimer) {
+      clearTimeout(this.fallbackTimer);
+      this.fallbackTimer = null;
+    }
+    for (const osc of this.fallbackOsc) {
+      try {
+        osc.stop();
+      } catch {
+        /* already stopped */
+      }
+    }
+    this.fallbackOsc = [];
   }
 
   async renderWav(
