@@ -8,29 +8,28 @@ import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 const LINKS = [
+  { href: routes.playground, label: "Playground" },
   { href: routes.models, label: "Models" },
-  { href: routes.research, label: "Lab" },
   { href: routes.clavier, label: "Clavier" },
+  { href: routes.research, label: "Lab" },
 ];
 
 export function SiteNav() {
   const pathname = usePathname();
 
   return (
-    <header className="sticky top-0 z-20 flex items-center justify-between border-b bg-background/90 px-6 py-3 backdrop-blur-md">
-      <Logo />
-      <nav className="flex items-center gap-5">
+    <header className="sticky top-0 z-20 flex items-center justify-between border-b bg-background/90 px-5 py-3 backdrop-blur-md sm:px-7">
+      <Logo glow />
+      <nav className="flex items-center gap-4 sm:gap-6">
         {LINKS.map((link) => {
           const current =
-            (link.href === routes.research && pathname.startsWith("/research")) ||
-            (link.href === routes.clavier && pathname.startsWith("/clavier")) ||
-            (link.href === routes.models && pathname.startsWith("/models"));
+            pathname === link.href || pathname.startsWith(link.href);
           return (
             <Link
               key={link.href}
               href={link.href}
               className={cn(
-                "text-sm font-medium",
+                "hidden text-sm font-medium sm:inline",
                 current
                   ? "text-foreground"
                   : "text-muted-foreground hover:text-foreground"
@@ -40,8 +39,8 @@ export function SiteNav() {
             </Link>
           );
         })}
-        <Link href={routes.app} className={buttonVariants({ size: "sm" })}>
-          Open clavier
+        <Link href={routes.playground} className={buttonVariants({ size: "sm" })}>
+          Generate
         </Link>
       </nav>
     </header>
@@ -50,9 +49,9 @@ export function SiteNav() {
 
 export function SiteFooter() {
   return (
-    <footer className="mt-auto flex flex-col items-start justify-between gap-2 border-t px-6 py-7 text-sm text-muted-foreground sm:flex-row sm:items-center">
-      <Logo />
-      <span>notate · clavier</span>
+    <footer className="mt-auto flex flex-col items-start justify-between gap-3 border-t px-5 py-8 text-sm text-muted-foreground sm:flex-row sm:items-center sm:px-7">
+      <Logo glow />
+      <span>one click, or a sketch</span>
     </footer>
   );
 }

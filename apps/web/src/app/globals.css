@@ -129,6 +129,14 @@
   }
 }
 
+body {
+  background-image: radial-gradient(
+    ellipse 80% 45% at 50% -12%,
+    oklch(0.2 0 0 / 0.045),
+    transparent 60%
+  );
+}
+
 @keyframes nt-scan {
   from {
     left: 6%;

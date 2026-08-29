@@ -5,6 +5,7 @@ export const routes = {
   modelsHash: "/#models",
   research: "/research/",
   clavier: "/clavier/",
+  playground: "/playground/",
   app: "/app/",
   dev: "/dev/",
 } as const;
@@ -12,8 +13,6 @@ export const routes = {
 export const aliases: Record<string, string> = {
   "/afterbar": routes.clavier,
   "/afterbar/": routes.clavier,
-  "/playground": routes.app,
-  "/playground/": routes.app,
 };
 
 export function siteOrigin(): string {

@@ -118,10 +118,26 @@ def checkpoints():
     return {"checkpoints": items, "search_roots": [str(r) for r in _search_roots()]}
 
 
+def _notes_from_midi(path: Path) -> list[dict]:
+    full = pretty_midi.PrettyMIDI(str(path))
+    notes = [
+        {
+            "pitch": int(note.pitch),
+            "start": float(round(note.start, 4)),
+            "duration": float(round(note.end - note.start, 4)),
+            "velocity": int(note.velocity),
+        }
+        for inst in full.instruments
+        for note in inst.notes
+    ]
+    notes.sort(key=lambda n: (n["start"], n["pitch"]))
+    return notes
+
+
 @app.post("/api/generate")
 async def generate(
-    checkpoint: str = Form(...),
-    max_new_tokens: int = Form(512),
+    checkpoint: str | None = Form(None),
+    max_new_tokens: int = Form(256),
     temperature: float = Form(1.0),
     top_k: int = Form(40),
     context_len: int = Form(256),
@@ -129,12 +145,20 @@ async def generate(
     instrument: str = Form("piano"),
     seed_midi: UploadFile | None = File(None),
 ):
+    ckpt_spec = (checkpoint or "").strip() or _default_cowriter_checkpoint()
+    if not ckpt_spec:
+        raise HTTPException(status_code=404, detail="No trained checkpoint found.")
     try:
-        (nn, tokenizer), ckpt_path = _get_model(checkpoint)
+        (nn, tokenizer), ckpt_path = _get_model(ckpt_spec)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except NotImplementedError as exc:
         raise HTTPException(status_code=501, detail=str(exc)) from exc
+    if hasattr(nn, "enc_blocks"):
+        raise HTTPException(
+            status_code=400,
+            detail="This checkpoint is canon (fill). Use POST /api/fill.",
+        )
 
     ckpt_path_obj = Path(ckpt_path)
     model_name = infer_model_from_path(ckpt_path_obj)
@@ -150,18 +174,21 @@ async def generate(
         seed_path.write_bytes(await seed_midi.read())
 
     device = get_device()
-    tokens = generate_tokens(
-        nn,
-        tokenizer,
-        max_new_tokens=max_new_tokens,
-        temperature=temperature,
-        top_k=top_k if top_k > 0 else 0,
-        seed_midi=str(seed_path) if seed_path else None,
-        context_len=context_len,
-        emotion=emotion,
-        instrument=instrument,
-        device=device,
-    )
+    try:
+        tokens = generate_tokens(
+            nn,
+            tokenizer,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_k=top_k if top_k > 0 else 0,
+            seed_midi=str(seed_path) if seed_path else None,
+            context_len=context_len,
+            emotion=emotion,
+            instrument=instrument,
+            device=device,
+        )
+    except TypeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     midi_path = run_dir / "generated.midi"
     tokenizer.tokens_to_midi(tokens, midi_path)
@@ -194,6 +221,7 @@ async def generate(
         "params": params,
         "stats": _token_stats(tokenizer, tokens),
         "tokens_preview": preview,
+        "notes": _notes_from_midi(midi_path),
         "midi_url": f"/api/runs/{run_id}/generated.midi",
         "score_url": f"/api/runs/{run_id}/score.musicxml",
         "score_note": (

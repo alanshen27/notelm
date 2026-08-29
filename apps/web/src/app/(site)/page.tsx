@@ -1,35 +1,36 @@
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { buttonVariants } from "@/components/ui/button";
+import { Logo } from "@/components/logo";
 import { ModelCards } from "@/components/model-cards";
 import { routes } from "@/lib/routes";
 
 export default function HomePage() {
   return (
     <>
-      <section className="mx-auto max-w-[920px] px-7 pb-10 pt-16 sm:pt-20">
-        <p className="mb-4 text-xs font-semibold tracking-[0.14em] text-muted-foreground uppercase">
+      <section className="mx-auto flex max-w-[920px] flex-col items-center px-7 pb-14 pt-14 text-center sm:pt-20">
+        <Logo href={routes.playground} wordmark={false} size="hero" glow />
+        <p className="mt-8 text-xs font-semibold tracking-[0.18em] text-muted-foreground uppercase">
           A co-writer for piano
         </p>
-        <h1 className="text-[clamp(2.8rem,8vw,5.4rem)] font-bold leading-[0.95] tracking-[-0.055em]">
-          From a sketch
+        <h1 className="mt-4 text-[clamp(2.6rem,7vw,5rem)] font-bold leading-[0.95] tracking-[-0.055em]">
+          Hear a phrase.
           <br />
-          to the next bar.
+          Or write one.
         </h1>
-        <p className="mt-7 max-w-xl text-lg leading-relaxed text-muted-foreground">
-          You play a few bars. notate plays what comes next. Not a song from a
-          prompt — a second pair of hands on the roll. The app is{" "}
-          <strong className="font-semibold text-foreground">clavier</strong>.
+        <p className="mt-6 max-w-lg text-lg leading-relaxed text-muted-foreground">
+          One click for a new idea. Or open the roll and keep what you play —
+          notate writes the next bars.
         </p>
-        <div className="mt-9 flex flex-wrap items-center gap-3">
-          <Link href={routes.app} className={buttonVariants({ size: "lg" })}>
-            Open clavier
+        <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
+          <Link href={routes.playground} className={buttonVariants({ size: "lg" })}>
+            Generate
           </Link>
           <Link
-            href={routes.modelsHash}
+            href={routes.app}
             className={buttonVariants({ variant: "ghost", size: "lg" })}
           >
-            See models
+            Open clavier
           </Link>
         </div>
       </section>
@@ -65,13 +66,13 @@ export default function HomePage() {
           How it works
         </p>
         <h2 className="mb-10 max-w-[16ch] text-4xl font-bold tracking-tight sm:text-5xl">
-          A co-writer, not a jukebox.
+          A click, or a sketch.
         </h2>
         <div className="grid gap-8 sm:grid-cols-3">
           {[
-            ["01", "Sketch", "Drop chords or a melody on the roll. Those bars stay yours."],
-            ["02", "Continue", "The model writes the next ones."],
-            ["03", "Hear", "Play it back, or take the audio with you."],
+            ["01", "Generate", "Hit one button. Prelude writes a phrase. Play it."],
+            ["02", "Sketch", "Or drop chords on the roll. Those bars stay yours."],
+            ["03", "Continue", "The model writes the next ones. Hear it, keep it."],
           ].map(([n, title, body]) => (
             <article key={n}>
               <span className="text-xs font-semibold tracking-[0.12em] text-muted-foreground">
@@ -102,23 +103,29 @@ export default function HomePage() {
         <div className="grid gap-4 sm:grid-cols-2">
           <Card>
             <CardContent>
-              <h3 className="text-lg font-semibold">In the browser</h3>
+              <h3 className="text-lg font-semibold">Playground</h3>
               <p className="mt-2 text-muted-foreground">
-                Open clavier, sketch, continue, export.
+                No grid. One click. A phrase you can play or take with you.
               </p>
             </CardContent>
           </Card>
           <Card>
             <CardContent>
-              <h3 className="text-lg font-semibold">On the desktop</h3>
+              <h3 className="text-lg font-semibold">Clavier</h3>
               <p className="mt-2 text-muted-foreground">
-                Same editor, in its own window.
+                Sketch, continue, export. The co-writer.
               </p>
             </CardContent>
           </Card>
         </div>
-        <div className="mt-8">
-          <Link href={routes.app} className={buttonVariants({ size: "lg" })}>
+        <div className="mt-8 flex flex-wrap gap-3">
+          <Link href={routes.playground} className={buttonVariants({ size: "lg" })}>
+            Open playground
+          </Link>
+          <Link
+            href={routes.app}
+            className={buttonVariants({ variant: "outline", size: "lg" })}
+          >
             Launch clavier
           </Link>
         </div>

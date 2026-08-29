@@ -10,8 +10,8 @@ export default function ModelsPage() {
         Pick a voice. Keep writing.
       </h1>
       <p className="mt-6 max-w-xl text-lg text-muted-foreground">
-        Each model continues what you play. Try them in clavier — same piano
-        roll, different ear.
+        Each model can write a phrase from nothing, or continue what you play
+        in clavier.
       </p>
       <div className="mt-10">
         <ModelCards />

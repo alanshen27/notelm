@@ -51,3 +51,31 @@ export async function continueNotes(payload: {
     midi_url?: string;
   }>;
 }
+
+export async function generatePhrase(payload?: {
+  checkpoint?: string;
+  max_new_tokens?: number;
+  temperature?: number;
+  emotion?: string;
+  instrument?: string;
+}) {
+  const fd = new FormData();
+  fd.append("max_new_tokens", String(payload?.max_new_tokens ?? 256));
+  fd.append("temperature", String(payload?.temperature ?? 1.05));
+  fd.append("top_k", "40");
+  fd.append("context_len", "256");
+  fd.append("emotion", payload?.emotion ?? "none");
+  fd.append("instrument", payload?.instrument ?? "piano");
+  if (payload?.checkpoint) fd.append("checkpoint", payload.checkpoint);
+  const r = await fetch(apiUrl("/api/generate"), { method: "POST", body: fd });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({ detail: r.statusText }));
+    throw new Error(err.detail || r.statusText);
+  }
+  return r.json() as Promise<{
+    notes: SynthNote[];
+    midi_url?: string;
+    model?: string;
+    emotion?: string;
+  }>;
+}

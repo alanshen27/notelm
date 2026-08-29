@@ -40,6 +40,8 @@ More training MIDI (EMOPIA emotion clips, Pop1K7, ADL piano, ASAP scores):
 
 ## The co-writer
 
+- **Playground** (`/playground/`): one click, no grid. Prelude writes a phrase
+  and plays it.
 - Click notes onto the grid (or stamp a progression: I–V–vi–IV etc.).
 - **Continue with AI** primes the model on your notes and returns a
   continuation (amber). **Accept into sketch** merges it and lets you iterate.
@@ -102,20 +104,31 @@ python3 scripts/runpod_train.py terminate   # you stop billing
 ## Cloud (Render)
 
 Inference only — Render has no GPU. The ~21M Transformer fits in RAM and
-runs on CPU (`render.yaml` + `Dockerfile`). Dashboard: New → Blueprint.
+runs on CPU. Dashboard: New → Blueprint (`render.yaml`), or sync the Blueprint
+if `notelm` already exists.
 
-`4c-8g` is the default plan (free 512 MB will OOM). Shipped checkpoints are
-`prelude.pt` and `etude.pt` (REMI).
+Two services:
+
+| Service | Image | Plan | What it does |
+|---|---|---|---|
+| `notelm` | `Dockerfile` | starter | Next static site; proxies `/api` to the API |
+| `notelm-api` | `Dockerfile.api` | `4c-8g` | FastAPI + PyTorch CPU. Free 512 MB will OOM. |
+
+Public URL stays https://notelm.onrender.com. The browser still calls `/api/...`
+on that host; the site container forwards those requests to
+https://notelm-api.onrender.com.
+
+Shipped checkpoints are `prelude.pt` and `etude.pt` (REMI).
 
 ## API
 
 - `POST /api/continue` — `{notes, emotion?}` → continuation. Co-writer.
-- `POST /api/generate` — sampling + optional seed MIDI + emotion.
+- `POST /api/generate` — sampling from scratch (playground) or optional seed MIDI.
 
 ## Layout
 
 ```
-apps/web                  site + clavier
+apps/web                  site + playground + clavier
 apps/afterbar             clavier (legacy vite app)
 src/train.py              Transformer training
 src/api.py                FastAPI — site + /app + /api

@@ -16,9 +16,15 @@ export default function ClavierInfoPage() {
         Sketch a progression or a melody. Ask the model to continue. Play it.
         Keep what you like.
       </p>
-      <div className="mt-8">
+      <div className="mt-8 flex flex-wrap gap-3">
         <Link href={routes.app} className={buttonVariants({ size: "lg" })}>
           Open clavier
+        </Link>
+        <Link
+          href={routes.playground}
+          className={buttonVariants({ variant: "outline", size: "lg" })}
+        >
+          Just generate
         </Link>
       </div>
       <div className="mt-14 grid gap-4 sm:grid-cols-3">

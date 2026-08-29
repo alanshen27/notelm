@@ -58,12 +58,20 @@ export function ModelCards() {
         </CardHeader>
         <CardContent className="space-y-5 text-[0.98rem] leading-relaxed opacity-90">
           <p>{featured.blurb}</p>
-          <Link
-            href={routes.app}
-            className={buttonVariants({ variant: "secondary" })}
-          >
-            Try it in clavier
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            <Link
+              href={routes.playground}
+              className={buttonVariants({ variant: "secondary" })}
+            >
+              Hear it
+            </Link>
+            <Link
+              href={routes.app}
+              className={buttonVariants({ variant: "ghost" })}
+            >
+              Write in clavier
+            </Link>
+          </div>
         </CardContent>
       </Card>
       <div className="flex flex-col gap-4">

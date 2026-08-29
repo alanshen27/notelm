@@ -10,7 +10,7 @@ export const metadata: Metadata = {
     default: "notate",
     template: "%s · notate",
   },
-  description: "Sketch a few bars. notate continues.",
+  description: "Hear a phrase, or sketch one. notate plays what comes next.",
   icons: { icon: "/logo.png?v=7" },
 };
 
