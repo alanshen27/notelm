@@ -39,4 +39,7 @@ services:
       - key: NEXT_PUBLIC_SITE_URL
         value: https://notelm.onrender.com
       - key: API_UPSTREAM
-        value: https://notelm-api.onrender.com
+        fromService:
+          name: notelm-api
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
