@@ -1,20 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Button, buttonVariants } from "@/components/ui/button";
 import { generatePhrase, type SynthNote } from "@/lib/api";
-import { apiUrl, routes } from "@/lib/routes";
+import { routes } from "@/lib/routes";
 import { PRESETS, SynthEngine } from "@/lib/synth";
+import { LivingBlob } from "@/components/living-blob";
 import { cn } from "@/lib/utils";
 
 const MOODS = [
-  { id: "none", label: "Any" },
-  { id: "Q1", label: "Bright" },
-  { id: "Q2", label: "Tense" },
-  { id: "Q3", label: "Dark" },
-  { id: "Q4", label: "Calm" },
+  { id: "none", label: "Any", swatch: "bg-neutral-800" },
+  { id: "Q1", label: "Bright", swatch: "bg-[#f0c14b]" },
+  { id: "Q2", label: "Tense", swatch: "bg-[#d6452e]" },
+  { id: "Q3", label: "Dark", swatch: "bg-[#3a2a78]" },
+  { id: "Q4", label: "Calm", swatch: "bg-[#3aa8a0]" },
 ] as const;
+
+const RING = 40;
 
 export function Playground() {
   const engineRef = useRef(new SynthEngine());
@@ -22,18 +24,19 @@ export function Playground() {
   const [busy, setBusy] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notes, setNotes] = useState<SynthNote[]>([]);
-  const [midiUrl, setMidiUrl] = useState<string | null>(null);
+  const [heard, setHeard] = useState(false);
 
   useEffect(() => {
-    engineRef.current.setParams(PRESETS["Neon Keys"]);
-    engineRef.current.onEnded = () => setPlaying(false);
+    const engine = engineRef.current;
+    engine.setParams(PRESETS["Neon Keys"]);
+    engine.onEnded = () => setPlaying(false);
     return () => {
-      engineRef.current.stop();
+      engine.stop();
     };
   }, []);
 
   const generate = useCallback(async () => {
+    engineRef.current.unlock();
     setBusy(true);
     setError(null);
     engineRef.current.stop();
@@ -44,12 +47,11 @@ export function Playground() {
         max_new_tokens: 256,
         temperature: 1.05,
       });
-      const next = out.notes || [];
+      const next: SynthNote[] = out.notes || [];
       if (!next.length) throw new Error("The model returned silence. Try again.");
-      setNotes(next);
-      setMidiUrl(out.midi_url ? apiUrl(out.midi_url) : null);
       await engineRef.current.play(next);
       setPlaying(true);
+      setHeard(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not generate.");
     } finally {
@@ -57,21 +59,7 @@ export function Playground() {
     }
   }, [mood]);
 
-  const play = useCallback(async () => {
-    if (!notes.length) return;
-    try {
-      await engineRef.current.play(notes);
-      setPlaying(true);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not play.");
-    }
-  }, [notes]);
-
-  const stop = useCallback(() => {
-    engineRef.current.stop();
-    setPlaying(false);
-  }, []);
+  const selected = MOODS.find((m) => m.id === mood) ?? MOODS[0];
 
   return (
     <section className="mx-auto flex min-h-[70vh] max-w-[720px] flex-col items-center px-6 py-16 text-center sm:py-20">
@@ -82,97 +70,87 @@ export function Playground() {
         One click. A phrase.
       </h1>
       <p className="mt-4 max-w-md text-muted-foreground">
-        No grid. No sketch. Prelude writes something you can hear right now.
+        Pick a mood on the circle, then tap the mark. It writes a short line and plays it.
       </p>
 
-      <div className="mt-7 flex flex-wrap justify-center gap-2">
-        {MOODS.map((m) => (
-          <button
-            key={m.id}
-            type="button"
-            onClick={() => setMood(m.id)}
-            className={cn(
-              "rounded-full border px-3 py-1 text-xs font-medium tracking-wide transition-colors",
-              mood === m.id
-                ? "border-foreground/40 bg-foreground text-background"
-                : "border-border text-muted-foreground hover:border-foreground/30 hover:text-foreground"
-            )}
-          >
-            {m.label}
-          </button>
-        ))}
+      <div
+        role="radiogroup"
+        aria-label="Mood"
+        className="relative mx-auto mt-10 size-[24.5rem] sm:size-[28rem]"
+      >
+        <div
+          aria-hidden
+          className="pointer-events-none absolute left-1/2 top-1/2 size-[80%] -translate-x-1/2 -translate-y-1/2 rounded-full border border-border"
+        />
+
+        {MOODS.map((m, i) => {
+          const rad = ((-90 + (i * 360) / MOODS.length) * Math.PI) / 180;
+          const active = mood === m.id;
+          return (
+            <button
+              key={m.id}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              aria-label={m.label}
+              onClick={() => setMood(m.id)}
+              className="absolute z-10 size-14 -translate-x-1/2 -translate-y-1/2 overflow-visible"
+              style={{
+                left: `${50 + RING * Math.cos(rad)}%`,
+                top: `${50 + RING * Math.sin(rad)}%`,
+              }}
+            >
+              <span
+                className={cn(
+                  "absolute left-1/2 top-1/2 size-9 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 shadow-sm transition-transform sm:size-10",
+                  m.swatch,
+                  active
+                    ? "scale-110 border-foreground"
+                    : "border-white opacity-80 hover:scale-105 hover:opacity-100"
+                )}
+              />
+              <span
+                className={cn(
+                  "pointer-events-none absolute left-1/2 top-1/2 whitespace-nowrap text-[10px] font-medium tracking-wide sm:text-xs",
+                  active ? "text-foreground" : "text-muted-foreground"
+                )}
+                style={{
+                  transform: `translate(-50%, -50%) translate(${Math.cos(rad) * 28}px, ${Math.sin(rad) * 28}px)`,
+                }}
+              >
+                {m.label}
+              </span>
+            </button>
+          );
+        })}
+
+        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
+          <LivingBlob
+            mood={mood}
+            busy={busy}
+            playing={playing}
+            getLevel={() => engineRef.current.getLevel()}
+            disabled={busy}
+            onClick={generate}
+            label={busy ? "Generating" : "Generate a phrase"}
+          />
+        </div>
       </div>
 
-      <button
-        type="button"
-        onClick={generate}
-        disabled={busy}
-        aria-label={busy ? "Generating" : "Generate a phrase"}
-        className={cn(
-          "group relative mt-12 flex size-44 items-center justify-center rounded-full sm:size-52",
-          "outline-none focus-visible:ring-2 focus-visible:ring-foreground/25",
-          "disabled:cursor-wait"
-        )}
-      >
-        <span
-          aria-hidden
-          className={cn(
-            "absolute inset-[-18%] rounded-full bg-[radial-gradient(circle,oklch(0.2_0_0/0.12),transparent_70%)] blur-xl transition-opacity",
-            busy ? "animate-pulse opacity-100" : "opacity-70 group-hover:opacity-100"
-          )}
-        />
-        <span
-          aria-hidden
-          className={cn(
-            "absolute inset-0 rounded-full border border-border bg-muted/50 shadow-[0_20px_60px_oklch(0_0_0/0.08)]",
-            busy && "animate-pulse"
-          )}
-        />
-        <img
-          src="/logo.png?v=7"
-          alt=""
-          width={208}
-          height={208}
-          className={cn(
-            "relative size-[78%] object-contain transition-transform duration-500",
-            busy ? "scale-95 opacity-80" : "group-hover:scale-105"
-          )}
-        />
-      </button>
-
-      <p className="mt-6 text-sm text-muted-foreground">
-        {busy ? "Writing…" : notes.length ? "Again, whenever you want." : "Click the mark."}
+      <p className="mt-1 text-sm text-muted-foreground">
+        {busy
+          ? "Writing…"
+          : playing
+            ? `Playing · ${selected.label}`
+            : heard
+              ? `${selected.label}. Again, whenever you want.`
+              : `${selected.label}. Click the mark.`}
       </p>
 
       {error && (
         <p className="mt-4 max-w-md text-sm text-destructive" role="alert">
           {error}
         </p>
-      )}
-
-      {!!notes.length && (
-        <div className="mt-10 w-full">
-          <PhraseRoll notes={notes} />
-          <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
-            {playing ? (
-              <Button onClick={stop}>Stop</Button>
-            ) : (
-              <Button onClick={play}>Play</Button>
-            )}
-            <Button variant="outline" onClick={generate} disabled={busy}>
-              Again
-            </Button>
-            {midiUrl && (
-              <a
-                href={midiUrl}
-                className={buttonVariants({ variant: "ghost" })}
-                download="notate.midi"
-              >
-                MIDI
-              </a>
-            )}
-          </div>
-        </div>
       )}
 
       <p className="mt-14 text-sm text-muted-foreground">
@@ -183,48 +161,4 @@ export function Playground() {
       </p>
     </section>
   );
-}
-
-function PhraseRoll({ notes }: { notes: SynthNote[] }) {
-  const { viewBox, rects } = useMemo(() => layoutNotes(notes), [notes]);
-  return (
-    <div className="overflow-hidden rounded-2xl ring-1 ring-foreground/10">
-      <svg className="block w-full" viewBox={viewBox} role="img">
-        <title>generated phrase</title>
-        <rect width="100%" height="100%" fill="#f7f6f3" />
-        {rects.map((r, i) => (
-          <rect
-            key={i}
-            x={r.x}
-            y={r.y}
-            width={r.w}
-            height={r.h}
-            rx="1.6"
-            fill="#c45c26"
-            opacity={0.55 + (r.velocity / 127) * 0.45}
-          />
-        ))}
-      </svg>
-    </div>
-  );
-}
-
-function layoutNotes(notes: SynthNote[]) {
-  const minP = Math.min(...notes.map((n) => n.pitch));
-  const maxP = Math.max(...notes.map((n) => n.pitch));
-  const end = Math.max(...notes.map((n) => n.start + n.duration), 1);
-  const pad = 2;
-  const lo = minP - pad;
-  const hi = maxP + pad;
-  const rows = Math.max(hi - lo, 8);
-  const W = 280;
-  const H = Math.min(120, Math.max(64, rows * 4.2));
-  const rects = notes.map((n) => ({
-    x: (n.start / end) * (W - 8) + 4,
-    y: ((hi - n.pitch) / rows) * (H - 8) + 3,
-    w: Math.max(2.4, (n.duration / end) * (W - 8)),
-    h: Math.max(3.2, H / rows - 0.6),
-    velocity: n.velocity,
-  }));
-  return { viewBox: `0 0 ${W} ${H}`, rects };
 }

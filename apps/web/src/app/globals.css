@@ -146,6 +146,169 @@ body {
   }
 }
 
+@keyframes blob-a {
+  0% {
+    transform: translate(-12%, -6%) scale(0.92) rotate(-8deg);
+  }
+  35% {
+    transform: translate(10%, 8%) scale(1.12) rotate(7deg);
+  }
+  70% {
+    transform: translate(-8%, 12%) scale(0.88) rotate(-4deg);
+  }
+  100% {
+    transform: translate(-12%, -6%) scale(0.92) rotate(-8deg);
+  }
+}
+
+@keyframes blob-b {
+  0% {
+    transform: translate(10%, 8%) scale(1.08) rotate(6deg);
+  }
+  50% {
+    transform: translate(-14%, -4%) scale(0.84) rotate(-10deg);
+  }
+  100% {
+    transform: translate(10%, 8%) scale(1.08) rotate(6deg);
+  }
+}
+
+@keyframes blob-glow {
+  0%,
+  100% {
+    transform: scale(0.88);
+    opacity: 0.35;
+  }
+  50% {
+    transform: scale(1.18);
+    opacity: 0.7;
+  }
+}
+
+.blob-orb {
+  transform: scale(var(--blob-kick, 1));
+}
+
+.blob-layer {
+  position: absolute;
+  inset: 6%;
+  width: 88%;
+  height: 88%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.blob-layer-a {
+  animation: blob-a 3.6s ease-in-out infinite;
+}
+
+.blob-layer-b {
+  opacity: 0.4;
+  filter: blur(3px);
+  animation: blob-b 4.8s ease-in-out infinite;
+}
+
+.blob-halo {
+  position: absolute;
+  inset: 4%;
+  border-radius: 999px;
+  background: radial-gradient(circle, oklch(0.2 0 0 / 0.16), transparent 68%);
+  animation: blob-glow 2.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.blob-busy .blob-layer-a,
+.blob-playing .blob-layer-a {
+  animation-duration: 1.6s;
+}
+
+.blob-busy .blob-layer-b,
+.blob-playing .blob-layer-b {
+  animation-duration: 2s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .blob-layer-a,
+  .blob-layer-b,
+  .blob-halo {
+    animation: none;
+  }
+}
+
+.blob-mood video {
+  transition: filter 400ms ease;
+}
+
+.blob-mood-none video {
+  filter: none;
+}
+
+.blob-mood-Q1 video {
+  filter: brightness(1.28) sepia(1) saturate(2.6) hue-rotate(12deg);
+}
+
+.blob-mood-Q2 video {
+  filter: brightness(1.12) sepia(1) saturate(3.2) hue-rotate(-22deg);
+}
+
+.blob-mood-Q3 video {
+  filter: brightness(0.82) sepia(0.85) saturate(2.4) hue-rotate(228deg);
+}
+
+.blob-mood-Q4 video {
+  filter: brightness(1.22) sepia(0.9) saturate(2.1) hue-rotate(158deg);
+}
+
+.blob-wash {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  mix-blend-mode: soft-light;
+  opacity: 0.55;
+  transition: background 400ms ease, opacity 400ms ease;
+}
+
+.blob-mood-none .blob-wash {
+  opacity: 0;
+}
+
+.blob-mood-Q1 .blob-wash {
+  background: #f0c14b;
+}
+
+.blob-mood-Q2 .blob-wash {
+  background: #d6452e;
+}
+
+.blob-mood-Q3 .blob-wash {
+  background: #3a2a78;
+}
+
+.blob-mood-Q4 .blob-wash {
+  background: #3aa8a0;
+}
+
+.blob-mood {
+  box-shadow: 0 0 0 0 transparent;
+  transition: box-shadow 400ms ease;
+}
+
+.blob-mood-Q1 {
+  box-shadow: 0 18px 50px oklch(0.78 0.14 85 / 0.35);
+}
+
+.blob-mood-Q2 {
+  box-shadow: 0 18px 50px oklch(0.62 0.2 28 / 0.32);
+}
+
+.blob-mood-Q3 {
+  box-shadow: 0 18px 50px oklch(0.4 0.14 290 / 0.38);
+}
+
+.blob-mood-Q4 {
+  box-shadow: 0 18px 50px oklch(0.7 0.1 190 / 0.32);
+}
+
 .hero-playhead {
   position: absolute;
   inset-block: 0;
