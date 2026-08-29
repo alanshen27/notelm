@@ -11,6 +11,33 @@ function makeAudioContext(): AudioContext {
   return new AC();
 }
 
+export function normalizeNotes(notes: SynthNote[], snapStart = false): SynthNote[] {
+  const clean = notes
+    .map((n) => ({
+      pitch: Number(n.pitch),
+      start: Number(n.start),
+      duration: Number(n.duration),
+      velocity: Number(n.velocity) || 96,
+    }))
+    .filter(
+      (n) =>
+        Number.isFinite(n.pitch) &&
+        Number.isFinite(n.start) &&
+        Number.isFinite(n.duration) &&
+        n.duration > 0
+    )
+    .map((n) => ({
+      ...n,
+      pitch: Math.min(108, Math.max(21, Math.round(n.pitch))),
+      duration: Math.max(0.05, n.duration),
+      velocity: Math.min(127, Math.max(1, n.velocity)),
+    }));
+  if (!clean.length) return [];
+  if (!snapStart) return clean;
+  const t0 = Math.min(...clean.map((n) => n.start));
+  return clean.map((n) => ({ ...n, start: Math.max(0, n.start - t0) }));
+}
+
 export class SynthEngine {
   ctx: AudioContext | null = null;
   node: EngineNode | null = null;
@@ -23,6 +50,8 @@ export class SynthEngine {
   private bins = new Uint8Array(128);
   private fallbackOsc: OscillatorNode[] = [];
   private fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+  private hold: OscillatorNode | null = null;
+  private initing: Promise<void> | null = null;
 
   /** Call synchronously from a click so iOS unlocks audio before any await. */
   unlock() {
@@ -30,6 +59,7 @@ export class SynthEngine {
     if (!this.ctx) this.ctx = makeAudioContext();
     if (this.ctx.state === "suspended") void this.ctx.resume();
     this.ensureMaster();
+    this.keepAlive();
     try {
       const buf = this.ctx.createBuffer(1, 1, this.ctx.sampleRate);
       const src = this.ctx.createBufferSource();
@@ -39,6 +69,37 @@ export class SynthEngine {
     } catch {
       /* ignore */
     }
+    void this.init();
+  }
+
+  /** Short blip so the tap is audible before generate returns. */
+  tick() {
+    this.unlock();
+    if (!this.ctx || !this.master) return;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    const t = this.ctx.currentTime;
+    osc.type = "sine";
+    osc.frequency.value = 523.25;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.16, t + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.1);
+    osc.connect(g);
+    g.connect(this.master);
+    osc.start(t);
+    osc.stop(t + 0.12);
+  }
+
+  private keepAlive() {
+    if (this.hold || !this.ctx || !this.master) return;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.frequency.value = 40;
+    g.gain.value = 0.00002;
+    osc.connect(g);
+    g.connect(this.master);
+    osc.start();
+    this.hold = osc;
   }
 
   private ensureMaster() {
@@ -63,24 +124,32 @@ export class SynthEngine {
   }
 
   async init() {
-    this.unlock();
     if (this.node || !this.ctx) return;
-    try {
-      await this.ctx.audioWorklet.addModule(workletUrl);
-      this.node = new AudioWorkletNode(this.ctx, "notelm-synth", {
-        numberOfInputs: 0,
-        outputChannelCount: [2],
-      }) as EngineNode;
-      this.node.connect(this.master!);
-      this.node.port.onmessage = (e: MessageEvent) => {
-        if (e.data.type === "pos" && this.onPos) this.onPos(e.data.seconds);
-        if ((e.data.type === "ended" || e.data.type === "stopped") && this.onEnded)
-          this.onEnded();
-      };
-      if (Object.keys(this.params).length) this.setParams(this.params);
-    } catch {
-      this.node = null;
+    if (this.initing) {
+      await this.initing;
+      return;
     }
+    this.initing = (async () => {
+      try {
+        if (!this.ctx) return;
+        await this.ctx.audioWorklet.addModule(workletUrl);
+        this.node = new AudioWorkletNode(this.ctx, "notelm-synth", {
+          numberOfInputs: 0,
+          outputChannelCount: [2],
+        }) as EngineNode;
+        this.node.connect(this.master!);
+        this.node.port.onmessage = (e: MessageEvent) => {
+          if (e.data.type === "pos" && this.onPos) this.onPos(e.data.seconds);
+          if ((e.data.type === "ended" || e.data.type === "stopped") && this.onEnded)
+            this.onEnded();
+        };
+        if (Object.keys(this.params).length) this.setParams(this.params);
+      } catch {
+        this.node = null;
+      }
+    })();
+    await this.initing;
+    this.initing = null;
   }
 
   async resume() {
@@ -94,16 +163,23 @@ export class SynthEngine {
     this.node?.port.postMessage({ type: "params", values: this.params });
   }
 
-  async play(notes: SynthNote[]) {
-    if (!notes.length) throw new Error("Nothing to play");
-    await this.resume();
+  async play(notes: SynthNote[], opts?: { simple?: boolean; snapStart?: boolean }) {
+    const seq = normalizeNotes(notes, opts?.snapStart);
+    if (!seq.length) throw new Error("Nothing to play");
+    this.unlock();
+    if (this.ctx?.state === "suspended") await this.ctx.resume();
     if (!this.ctx) throw new Error("Synth failed to start");
     this.clearFallback();
-    if (this.node) {
-      this.node.port.postMessage({ type: "sequence", notes });
-      return;
+    // Playground (and any simple:true caller) uses oscillators so a long
+    // generate fetch cannot leave us with a mute worklet node.
+    if (!opts?.simple) {
+      await this.init();
+      if (this.node) {
+        this.node.port.postMessage({ type: "sequence", notes: seq });
+        return;
+      }
     }
-    this.playFallback(notes);
+    this.playFallback(seq);
   }
 
   stop() {
@@ -124,9 +200,9 @@ export class SynthEngine {
 
   private playFallback(notes: SynthNote[]) {
     const ctx = this.ctx!;
-    const now = ctx.currentTime + 0.04;
+    const now = ctx.currentTime + 0.02;
     const bus = ctx.createGain();
-    bus.gain.value = 0.2;
+    bus.gain.value = 0.38;
     bus.connect(this.master!);
     for (const n of notes) {
       const osc = ctx.createOscillator();
@@ -134,15 +210,15 @@ export class SynthEngine {
       osc.frequency.value = 440 * 2 ** ((n.pitch - 69) / 12);
       const g = ctx.createGain();
       const t0 = now + n.start;
-      const t1 = t0 + Math.max(0.06, n.duration);
-      const peak = Math.max(0.002, (n.velocity / 127) * 0.42);
+      const t1 = t0 + Math.max(0.08, n.duration);
+      const peak = Math.max(0.04, (n.velocity / 127) * 0.7);
       g.gain.setValueAtTime(0.0001, t0);
-      g.gain.exponentialRampToValueAtTime(peak, t0 + 0.018);
+      g.gain.exponentialRampToValueAtTime(peak, t0 + 0.02);
       g.gain.exponentialRampToValueAtTime(0.0001, t1);
       osc.connect(g);
       g.connect(bus);
       osc.start(t0);
-      osc.stop(t1 + 0.03);
+      osc.stop(t1 + 0.04);
       this.fallbackOsc.push(osc);
     }
     const end = Math.max(...notes.map((n) => n.start + n.duration), 0);
