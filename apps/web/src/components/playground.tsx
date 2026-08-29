@@ -2,11 +2,23 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { generatePhrase, type SynthNote } from "@/lib/api";
+import { fetchCheckpoints, generatePhrase, type SynthNote } from "@/lib/api";
+import {
+  PLAYGROUND_VOICES,
+  playgroundVoices,
+  voiceIsReady,
+  type PlaygroundVoice,
+} from "@/lib/checkpoints";
 import { routes } from "@/lib/routes";
 import { PRESETS, SynthEngine } from "@/lib/synth";
 import { LivingBlob } from "@/components/living-blob";
 import { cn } from "@/lib/utils";
+
+const DEFAULT_VOICES: PlaygroundVoice[] = PLAYGROUND_VOICES.map((v) => ({
+  stem: v.stem,
+  label: v.label,
+  path: "",
+}));
 
 const MOODS = [
   { id: "none", label: "Any", swatch: "bg-neutral-800" },
@@ -31,6 +43,8 @@ const STAND_IN: SynthNote[] = [
 export function Playground() {
   const engineRef = useRef(new SynthEngine());
   const [mood, setMood] = useState<(typeof MOODS)[number]["id"]>("none");
+  const [voices, setVoices] = useState<PlaygroundVoice[]>(DEFAULT_VOICES);
+  const [voice, setVoice] = useState("prelude");
   const [busy, setBusy] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -43,6 +57,25 @@ export function Playground() {
     return () => {
       engine.stop();
     };
+  }, []);
+
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search).get("model")?.toLowerCase();
+    if (q) setVoice(q);
+    fetchCheckpoints()
+      .then((data) => {
+        const rows = playgroundVoices(data.checkpoints || []);
+        setVoices(rows);
+        setVoice((cur) => {
+          const next = q || cur;
+          const hit = rows.find((v) => v.stem === next);
+          if (hit && voiceIsReady(hit)) return hit.stem;
+          return rows.find(voiceIsReady)?.stem ?? "prelude";
+        });
+      })
+      .catch(() => {
+        /* keep the catalog; Prelude still generates via the API default */
+      });
   }, []);
 
   useEffect(() => {
@@ -67,8 +100,10 @@ export function Playground() {
     setPlaying(false);
     let next: SynthNote[] = [];
     try {
+      const picked = voices.find((v) => v.stem === voice);
       const out = await generatePhrase({
         emotion: mood,
+        checkpoint: picked?.path || undefined,
         max_new_tokens: 256,
         temperature: 1.05,
       });
@@ -92,9 +127,20 @@ export function Playground() {
     } finally {
       setBusy(false);
     }
-  }, [mood]);
+  }, [mood, voice, voices]);
 
   const selected = MOODS.find((m) => m.id === mood) ?? MOODS[0];
+  const selectedVoice = voices.find((v) => v.stem === voice) ?? voices[0];
+  const line = `${selectedVoice?.label ?? "Prelude"} · ${selected.label}`;
+
+  const pickVoice = (next: PlaygroundVoice) => {
+    if (!voiceIsReady(next)) return;
+    engineRef.current.unlock();
+    setVoice(next.stem);
+    const url = new URL(window.location.href);
+    url.searchParams.set("model", next.stem);
+    window.history.replaceState(null, "", url);
+  };
 
   return (
     <section className="mx-auto flex min-h-[70vh] max-w-[720px] flex-col items-center px-6 py-16 text-center sm:py-20">
@@ -105,8 +151,40 @@ export function Playground() {
         One click. A phrase.
       </h1>
       <p className="mt-4 max-w-md text-muted-foreground">
-        Pick a mood on the circle, then tap the mark. It writes a short line and plays it.
+        Pick a model and a mood, then tap the mark. It writes a short line and plays it.
       </p>
+
+      <div
+        role="radiogroup"
+        aria-label="Model"
+        className="mt-8 flex flex-wrap justify-center gap-2"
+      >
+        {voices.map((v) => {
+          const on = voice === v.stem;
+          const ready = voiceIsReady(v);
+          return (
+            <button
+              key={v.stem}
+              type="button"
+              role="radio"
+              aria-checked={on}
+              aria-label={ready ? v.label : `${v.label}, coming soon`}
+              disabled={!ready}
+              onClick={() => pickVoice(v)}
+              className={cn(
+                "rounded-full border px-3.5 py-1.5 text-xs font-medium tracking-wide transition-colors",
+                on
+                  ? "border-foreground bg-foreground text-background"
+                  : "border-border text-muted-foreground hover:border-foreground/30 hover:text-foreground",
+                !ready && "cursor-not-allowed opacity-40 hover:border-border hover:text-muted-foreground"
+              )}
+            >
+              {v.label}
+              {!ready && <span className="ml-1.5 font-normal">soon</span>}
+            </button>
+          );
+        })}
+      </div>
 
       <div
         role="radiogroup"
@@ -182,12 +260,12 @@ export function Playground() {
         data-playing={playing ? "1" : "0"}
       >
         {busy
-          ? "Writing…"
+          ? `Writing · ${line}`
           : playing
-            ? `Playing · ${selected.label}`
+            ? `Playing · ${line}`
             : heard
-              ? `${selected.label}. Again, whenever you want.`
-              : `${selected.label}. Click the mark.`}
+              ? `${line}. Again, whenever you want.`
+              : `${line}. Click the mark.`}
       </p>
 
       {error && (

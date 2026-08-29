@@ -15,6 +15,13 @@ export const CHECKPOINT_CODENAMES = [
 /** Hidden on the public picker. /dev/ still lists them by code name. */
 export const EXPERIMENTAL_CODENAMES = ["invention", "etude"] as const;
 
+/** Playground generate voices. Canon is fill-only, so it is not here. */
+export const PLAYGROUND_VOICES = [
+  { stem: "prelude", label: "Prelude" },
+  { stem: "chaconne", label: "Chaconne" },
+  { stem: "sinfonia", label: "Sinfonia" },
+] as const;
+
 const CODENAME_SET = new Set<string>(CHECKPOINT_CODENAMES);
 const EXPERIMENTAL_SET = new Set<string>(EXPERIMENTAL_CODENAMES);
 
@@ -85,4 +92,30 @@ export function preferCheckpoint(list: Checkpoint[]) {
   const hit =
     publicList.find((c) => c.name === "prelude.pt") || publicList[0];
   return hit?.path ?? "";
+}
+
+export type PlaygroundVoice = {
+  stem: string;
+  label: string;
+  path: string;
+};
+
+export function playgroundVoices(list: Checkpoint[]): PlaygroundVoice[] {
+  const publicCkpts = cowriterCheckpoints(list).filter((c) => stemOf(c.name) !== "canon");
+  const byStem = new Map(publicCkpts.map((c) => [stemOf(c.name), c]));
+  const rows: PlaygroundVoice[] = PLAYGROUND_VOICES.map((v) => ({
+    stem: v.stem,
+    label: v.label,
+    path: byStem.get(v.stem)?.path ?? "",
+  }));
+  for (const c of publicCkpts) {
+    const stem = stemOf(c.name);
+    if (rows.some((r) => r.stem === stem)) continue;
+    rows.push({ stem, label: checkpointLabel(c), path: c.path });
+  }
+  return rows;
+}
+
+export function voiceIsReady(voice: PlaygroundVoice) {
+  return voice.stem === "prelude" || Boolean(voice.path);
 }
