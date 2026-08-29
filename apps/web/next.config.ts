@@ -11,8 +11,6 @@ const nextConfig: NextConfig = {
           return [
             { source: "/afterbar", destination: "/clavier/", permanent: false },
             { source: "/afterbar/", destination: "/clavier/", permanent: false },
-            { source: "/playground", destination: "/app/", permanent: false },
-            { source: "/playground/", destination: "/app/", permanent: false },
           ];
         },
         async rewrites() {

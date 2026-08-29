@@ -40,6 +40,8 @@ More training MIDI (EMOPIA emotion clips, Pop1K7, ADL piano, ASAP scores):
 
 ## The co-writer
 
+- **Playground** (`/playground/`): one click, no grid. Prelude writes a phrase
+  and plays it.
 - Click notes onto the grid (or stamp a progression: I–V–vi–IV etc.).
 - **Continue with AI** primes the model on your notes and returns a
   continuation (amber). **Accept into sketch** merges it and lets you iterate.
@@ -121,12 +123,12 @@ Shipped checkpoints are `prelude.pt` and `etude.pt` (REMI).
 ## API
 
 - `POST /api/continue` — `{notes, emotion?}` → continuation. Co-writer.
-- `POST /api/generate` — sampling + optional seed MIDI + emotion.
+- `POST /api/generate` — sampling from scratch (playground) or optional seed MIDI.
 
 ## Layout
 
 ```
-apps/web                  site + clavier
+apps/web                  site + playground + clavier
 apps/afterbar             clavier (legacy vite app)
 src/train.py              Transformer training
 src/api.py                FastAPI — site + /app + /api

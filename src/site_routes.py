@@ -14,6 +14,7 @@ PAGES = {
     "models": "/models/",
     "research": "/research/",
     "clavier": "/clavier/",
+    "playground": "/playground/",
     "app": "/app/",
     "dev": "/dev/",
 }
@@ -21,8 +22,6 @@ PAGES = {
 ALIASES = {
     "/afterbar": PAGES["clavier"],
     "/afterbar/": PAGES["clavier"],
-    "/playground": PAGES["app"],
-    "/playground/": PAGES["app"],
 }
 
 

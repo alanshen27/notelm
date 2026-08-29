@@ -20,8 +20,6 @@ const UPSTREAM = (process.env.API_UPSTREAM || "https://notelm-api.onrender.com")
 const ALIASES = {
   "/afterbar": "/clavier/",
   "/afterbar/": "/clavier/",
-  "/playground": "/app/",
-  "/playground/": "/app/",
 };
 
 const MIME = {
