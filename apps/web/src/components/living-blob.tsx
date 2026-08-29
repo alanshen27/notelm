@@ -50,13 +50,13 @@ export function LivingBlob({
       const t = now / 1000;
       const level = isPlaying ? levelOf?.() ?? 0 : 0;
       const energy = reduced
-        ? 0.06
+        ? 0.08
         : isPlaying
-          ? 0.38 + level * 1.6
+          ? 0.85 + level * 1.8
           : isBusy
-            ? 0.62
-            : 0.2;
-      const speed = reduced ? 0.15 : 0.55 + energy * 1.1;
+            ? 1.05
+            : 0.55;
+      const speed = reduced ? 0.18 : 0.85 + energy * 1.25;
 
       ctx.clearRect(0, 0, size, size);
       ctx.save();
@@ -71,17 +71,17 @@ export function LivingBlob({
       ctx.arc(0, 0, size * 0.48, 0, Math.PI * 2);
       ctx.fill();
 
-      const copies = reduced ? 1 : 5;
+      const copies = reduced ? 1 : 6;
       for (let i = 0; i < copies; i++) {
         const phase = t * speed + i * 1.15;
-        const dx = Math.cos(phase) * (8 + energy * 22);
-        const dy = Math.sin(phase * 1.35 + i) * (7 + energy * 18);
+        const dx = Math.cos(phase) * (18 + energy * 28);
+        const dy = Math.sin(phase * 1.35 + i) * (16 + energy * 24);
         const scale =
-          0.78 +
-          0.06 * Math.sin(t * (0.9 + energy) + i) +
-          energy * 0.07 +
-          glow * 0.15;
-        const rot = 0.05 * Math.sin(t * 0.45 + i * 0.4) + energy * 0.04 * Math.sin(t * 2 + i);
+          0.7 +
+          0.12 * Math.sin(t * (1.2 + energy) + i) +
+          energy * 0.08 +
+          glow * 0.12;
+        const rot = 0.12 * Math.sin(t * 0.7 + i * 0.4) + energy * 0.08 * Math.sin(t * 2.2 + i);
         ctx.save();
         ctx.globalAlpha = reduced ? 1 : 0.22 + i * 0.14;
         ctx.translate(dx, dy);
