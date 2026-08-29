@@ -95,7 +95,7 @@ export function Playground() {
               "rounded-full border px-3 py-1 text-xs font-medium tracking-wide transition-colors",
               mood === m.id
                 ? "border-foreground/40 bg-foreground text-background"
-                : "border-white/10 text-muted-foreground hover:border-white/25 hover:text-foreground"
+                : "border-border text-muted-foreground hover:border-foreground/30 hover:text-foreground"
             )}
           >
             {m.label}
@@ -110,21 +110,21 @@ export function Playground() {
         aria-label={busy ? "Generating" : "Generate a phrase"}
         className={cn(
           "group relative mt-12 flex size-44 items-center justify-center rounded-full sm:size-52",
-          "outline-none focus-visible:ring-2 focus-visible:ring-white/40",
+          "outline-none focus-visible:ring-2 focus-visible:ring-foreground/25",
           "disabled:cursor-wait"
         )}
       >
         <span
           aria-hidden
           className={cn(
-            "absolute inset-[-18%] rounded-full bg-[radial-gradient(circle,oklch(1_0_0/0.18),transparent_70%)] blur-xl transition-opacity",
+            "absolute inset-[-18%] rounded-full bg-[radial-gradient(circle,oklch(0.2_0_0/0.12),transparent_70%)] blur-xl transition-opacity",
             busy ? "animate-pulse opacity-100" : "opacity-70 group-hover:opacity-100"
           )}
         />
         <span
           aria-hidden
           className={cn(
-            "absolute inset-0 rounded-full border border-white/12 bg-black/40 shadow-[0_0_80px_oklch(1_0_0/0.08)]",
+            "absolute inset-0 rounded-full border border-border bg-muted/50 shadow-[0_20px_60px_oklch(0_0_0/0.08)]",
             busy && "animate-pulse"
           )}
         />
@@ -188,10 +188,10 @@ export function Playground() {
 function PhraseRoll({ notes }: { notes: SynthNote[] }) {
   const { viewBox, rects } = useMemo(() => layoutNotes(notes), [notes]);
   return (
-    <div className="overflow-hidden rounded-2xl ring-1 ring-white/10">
+    <div className="overflow-hidden rounded-2xl ring-1 ring-foreground/10">
       <svg className="block w-full" viewBox={viewBox} role="img">
         <title>generated phrase</title>
-        <rect width="100%" height="100%" fill="#0c0c0c" />
+        <rect width="100%" height="100%" fill="#f7f6f3" />
         {rects.map((r, i) => (
           <rect
             key={i}

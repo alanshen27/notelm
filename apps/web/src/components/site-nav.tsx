@@ -18,7 +18,7 @@ export function SiteNav() {
   const pathname = usePathname();
 
   return (
-    <header className="sticky top-0 z-20 flex items-center justify-between border-b border-white/8 bg-background/80 px-5 py-3 backdrop-blur-md sm:px-7">
+    <header className="sticky top-0 z-20 flex items-center justify-between border-b bg-background/90 px-5 py-3 backdrop-blur-md sm:px-7">
       <Logo glow />
       <nav className="flex items-center gap-4 sm:gap-6">
         {LINKS.map((link) => {
@@ -49,7 +49,7 @@ export function SiteNav() {
 
 export function SiteFooter() {
   return (
-    <footer className="mt-auto flex flex-col items-start justify-between gap-3 border-t border-white/8 px-5 py-8 text-sm text-muted-foreground sm:flex-row sm:items-center sm:px-7">
+    <footer className="mt-auto flex flex-col items-start justify-between gap-3 border-t px-5 py-8 text-sm text-muted-foreground sm:flex-row sm:items-center sm:px-7">
       <Logo glow />
       <span>one click, or a sketch</span>
     </footer>

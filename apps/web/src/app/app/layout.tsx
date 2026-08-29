@@ -12,8 +12,10 @@ export default function ClavierLayout({
   children: ReactNode;
 }) {
   return (
-    <div className="dark h-dvh overflow-hidden bg-background text-foreground">
-      {children}
+    <div className="dark">
+      <div className="h-dvh overflow-hidden bg-background text-foreground">
+        {children}
+      </div>
     </div>
   );
 }

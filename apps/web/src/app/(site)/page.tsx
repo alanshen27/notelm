@@ -36,8 +36,8 @@ export default function HomePage() {
       </section>
 
       <section className="px-7 pb-20" aria-hidden="true">
-        <Card className="overflow-hidden bg-card/70">
-          <div className="flex justify-between border-b border-white/8 px-4 py-3 text-xs font-semibold tracking-wide uppercase">
+        <Card className="overflow-hidden bg-muted/40">
+          <div className="flex justify-between border-b px-4 py-3 text-xs font-semibold tracking-wide uppercase">
             <span>prelude</span>
             <span className="text-muted-foreground">continuing</span>
           </div>
@@ -161,7 +161,7 @@ function PianoRollMock() {
           y={i * 12}
           width="280"
           height="12"
-          fill={i % 2 ? "#141414" : "#0e0e0e"}
+          fill={i % 2 ? "#f4f4f2" : "#fafaf8"}
         />
       ))}
       {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
@@ -171,7 +171,7 @@ function PianoRollMock() {
           y1="0"
           x2={i * 40}
           y2="96"
-          stroke={i === 0 ? "#3a3a3a" : "#222"}
+          stroke={i === 0 ? "#111" : "#e4e4e0"}
           strokeWidth={i % 2 === 0 ? 1 : 0.5}
         />
       ))}
@@ -183,7 +183,7 @@ function PianoRollMock() {
           width={n.w}
           height="8"
           rx="1.5"
-          fill={n.seed ? "#e8e4dc" : "#c45c26"}
+          fill={n.seed ? "#111" : "#c45c26"}
         />
       ))}
     </svg>

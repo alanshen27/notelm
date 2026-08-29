@@ -32,7 +32,7 @@ export function Logo({
         {glow && (
           <span
             aria-hidden
-            className="absolute inset-[-28%] rounded-full bg-[radial-gradient(circle,oklch(1_0_0/0.16),transparent_68%)] blur-md"
+            className="absolute inset-[-28%] rounded-full bg-[radial-gradient(circle,oklch(0.2_0_0/0.14),transparent_68%)] blur-md"
           />
         )}
         <img
