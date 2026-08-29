@@ -18,6 +18,16 @@ const MOODS = [
 
 const RING = 40;
 
+const STAND_IN: SynthNote[] = [
+  { pitch: 60, start: 0, duration: 0.45, velocity: 100 },
+  { pitch: 64, start: 0, duration: 0.45, velocity: 92 },
+  { pitch: 67, start: 0, duration: 0.45, velocity: 92 },
+  { pitch: 72, start: 0.5, duration: 0.4, velocity: 104 },
+  { pitch: 67, start: 1.0, duration: 0.35, velocity: 90 },
+  { pitch: 64, start: 1.4, duration: 0.55, velocity: 88 },
+  { pitch: 60, start: 2.05, duration: 0.9, velocity: 96 },
+];
+
 export function Playground() {
   const engineRef = useRef(new SynthEngine());
   const [mood, setMood] = useState<(typeof MOODS)[number]["id"]>("none");
@@ -35,25 +45,50 @@ export function Playground() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!playing) return;
+    let raf = 0;
+    const pulse = () => {
+      const el = document.getElementById("playground-audio");
+      if (el) el.dataset.level = engineRef.current.getLevel().toFixed(3);
+      raf = requestAnimationFrame(pulse);
+    };
+    raf = requestAnimationFrame(pulse);
+    return () => cancelAnimationFrame(raf);
+  }, [playing]);
+
   const generate = useCallback(async () => {
-    engineRef.current.unlock();
+    const engine = engineRef.current;
+    engine.unlock();
+    engine.stop();
+    engine.tick();
     setBusy(true);
     setError(null);
-    engineRef.current.stop();
     setPlaying(false);
+    let next: SynthNote[] = [];
     try {
       const out = await generatePhrase({
         emotion: mood,
         max_new_tokens: 256,
         temperature: 1.05,
       });
-      const next: SynthNote[] = out.notes || [];
+      next = out.notes || [];
       if (!next.length) throw new Error("The model returned silence. Try again.");
-      await engineRef.current.play(next);
+    } catch (err) {
+      next = STAND_IN;
+      setError(
+        err instanceof Error
+          ? `${err.message} Playing a stand-in so you can still hear something.`
+          : "Writer offline. Playing a stand-in."
+      );
+    }
+    try {
+      if (engine.ctx?.state === "suspended") await engine.ctx.resume();
+      await engine.play(next, { simple: true, snapStart: true });
       setPlaying(true);
       setHeard(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not generate.");
+      setError(err instanceof Error ? err.message : "Could not play.");
     } finally {
       setBusy(false);
     }
@@ -93,7 +128,10 @@ export function Playground() {
               role="radio"
               aria-checked={active}
               aria-label={m.label}
-              onClick={() => setMood(m.id)}
+              onClick={() => {
+                engineRef.current.unlock();
+                setMood(m.id);
+              }}
               className="absolute z-10 size-14 -translate-x-1/2 -translate-y-1/2 overflow-visible"
               style={{
                 left: `${50 + RING * Math.cos(rad)}%`,
@@ -137,7 +175,12 @@ export function Playground() {
         </div>
       </div>
 
-      <p className="mt-1 text-sm text-muted-foreground">
+      <p
+        id="playground-audio"
+        className="mt-1 text-sm text-muted-foreground"
+        data-busy={busy ? "1" : "0"}
+        data-playing={playing ? "1" : "0"}
+      >
         {busy
           ? "Writing…"
           : playing
