@@ -20,22 +20,21 @@ export function LivingBlob({
   onClick,
   label,
 }: Props) {
-  const wrapRef = useRef<HTMLButtonElement>(null);
-  const stateRef = useRef({ playing, getLevel });
-  stateRef.current = { playing, getLevel };
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const stateRef = useRef({ playing, busy, getLevel });
+  stateRef.current = { playing, busy, getLevel };
 
   useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
+    const video = videoRef.current;
+    if (!video) return;
+    void video.play().catch(() => {
+      /* autoplay can wait for the click */
+    });
     let raf = 0;
     const tick = () => {
-      const { playing: isPlaying, getLevel: levelOf } = stateRef.current;
-      if (isPlaying) {
-        const n = 1 + (levelOf?.() ?? 0) * 0.28;
-        el.style.setProperty("--blob-kick", String(n));
-      } else {
-        el.style.setProperty("--blob-kick", "1");
-      }
+      const { playing: isPlaying, busy: isBusy, getLevel: levelOf } = stateRef.current;
+      const kick = isPlaying ? 1.35 + (levelOf?.() ?? 0) * 1.4 : isBusy ? 1.7 : 1;
+      video.playbackRate = kick;
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -44,22 +43,32 @@ export function LivingBlob({
 
   return (
     <button
-      ref={wrapRef}
       type="button"
-      onClick={onClick}
+      onClick={() => {
+        void videoRef.current?.play();
+        onClick?.();
+      }}
       disabled={disabled}
       aria-label={label}
       className={cn(
-        "blob-orb relative size-48 overflow-visible rounded-full sm:size-56",
+        "relative size-48 overflow-hidden rounded-full sm:size-56",
         "outline-none focus-visible:ring-2 focus-visible:ring-foreground/25",
-        "disabled:cursor-wait",
-        busy && "blob-busy",
-        playing && "blob-playing"
+        "disabled:cursor-wait"
       )}
     >
-      <span className="blob-halo" aria-hidden />
-      <img src="/logo.png?v=7" alt="" className="blob-layer blob-layer-b" />
-      <img src="/logo.png?v=7" alt="" className="blob-layer blob-layer-a" />
+      <video
+        ref={videoRef}
+        className="size-full object-cover"
+        autoPlay
+        muted
+        loop
+        playsInline
+        preload="auto"
+        poster="/logo.png?v=7"
+      >
+        <source src="/blob.webm" type="video/webm" />
+        <source src="/blob.mp4" type="video/mp4" />
+      </video>
     </button>
   );
 }
