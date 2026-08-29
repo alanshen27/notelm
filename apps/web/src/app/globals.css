@@ -146,6 +146,95 @@ body {
   }
 }
 
+@keyframes blob-a {
+  0% {
+    transform: translate(-12%, -6%) scale(0.92) rotate(-8deg);
+  }
+  35% {
+    transform: translate(10%, 8%) scale(1.12) rotate(7deg);
+  }
+  70% {
+    transform: translate(-8%, 12%) scale(0.88) rotate(-4deg);
+  }
+  100% {
+    transform: translate(-12%, -6%) scale(0.92) rotate(-8deg);
+  }
+}
+
+@keyframes blob-b {
+  0% {
+    transform: translate(10%, 8%) scale(1.08) rotate(6deg);
+  }
+  50% {
+    transform: translate(-14%, -4%) scale(0.84) rotate(-10deg);
+  }
+  100% {
+    transform: translate(10%, 8%) scale(1.08) rotate(6deg);
+  }
+}
+
+@keyframes blob-glow {
+  0%,
+  100% {
+    transform: scale(0.88);
+    opacity: 0.35;
+  }
+  50% {
+    transform: scale(1.18);
+    opacity: 0.7;
+  }
+}
+
+.blob-orb {
+  transform: scale(var(--blob-kick, 1));
+}
+
+.blob-layer {
+  position: absolute;
+  inset: 6%;
+  width: 88%;
+  height: 88%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.blob-layer-a {
+  animation: blob-a 3.6s ease-in-out infinite;
+}
+
+.blob-layer-b {
+  opacity: 0.4;
+  filter: blur(3px);
+  animation: blob-b 4.8s ease-in-out infinite;
+}
+
+.blob-halo {
+  position: absolute;
+  inset: 4%;
+  border-radius: 999px;
+  background: radial-gradient(circle, oklch(0.2 0 0 / 0.16), transparent 68%);
+  animation: blob-glow 2.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.blob-busy .blob-layer-a,
+.blob-playing .blob-layer-a {
+  animation-duration: 1.6s;
+}
+
+.blob-busy .blob-layer-b,
+.blob-playing .blob-layer-b {
+  animation-duration: 2s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .blob-layer-a,
+  .blob-layer-b,
+  .blob-halo {
+    animation: none;
+  }
+}
+
 .hero-playhead {
   position: absolute;
   inset-block: 0;
